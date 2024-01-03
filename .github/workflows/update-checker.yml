@@ -11,6 +11,12 @@
 
 name: Update Checker
 
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: 0 0 * * 0
+
+
 env:
   REPO_URL: https://github.com/coolsnowwolf/lede
   REPO_BRANCH: master
@@ -24,12 +30,6 @@ env:
   UPLOAD_WETRANSFER: false
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
-
-
-on:
-  workflow_dispatch:
-  schedule:
-    - cron: 0 0 * * 0
 
 jobs:
   check:

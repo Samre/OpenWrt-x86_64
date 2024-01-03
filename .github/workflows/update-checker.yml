@@ -32,7 +32,7 @@ env:
   TZ: Asia/Shanghai
 
 jobs:
-  check:
+  build:
     #runs-on: ubuntu-latest
     runs-on: self-hosted
     timeout-minutes: 3600

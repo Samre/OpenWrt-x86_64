@@ -93,11 +93,9 @@ jobs:
       uses: garygrossgarten/github-action-ssh@release
       if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
       with:
-        command: ls -a
-        host: ${{ secrets.HOST }}
-        username: pyzz
+        host: 192.168.66.20
+        username: root
         port: 22
-        privateKey: ${{ secrets.ACTIONS_DEPLOY_KEY }}
 
     - name: Download package
       id: package

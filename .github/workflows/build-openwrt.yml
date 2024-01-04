@@ -95,10 +95,6 @@ jobs:
       env:
         ssh-private-key: ${{ secrets.BLOG_DEPLOY_KEY }}
 
-    - name: Scan public keys
-      run: |
-        ssh-keyscan lancitou.net >> ~/.ssh/known_hosts
-
     - name: Download package
       id: package
       run: |

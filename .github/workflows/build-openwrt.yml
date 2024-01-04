@@ -90,11 +90,14 @@ jobs:
         #TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         #TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
-      uses: webfactory/ssh-agent@v0.8.0
+      uses: garygrossgarten/github-action-ssh@release
       if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
       with:
-        ssh-private-key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
-
+        command: ls -a
+        host: ${{ secrets.HOST }}
+        username: pyzz
+        port: 22
+        privateKey: ${{ secrets.ACTIONS_DEPLOY_KEY }}
 
     - name: Download package
       id: package

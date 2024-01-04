@@ -94,6 +94,8 @@ jobs:
       if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
       env:
         deploy_key: ${{ secrets.BLOG_DEPLOY_KEY }}
+        publish_dir: ./public
+
 
     - name: Download package
       id: package

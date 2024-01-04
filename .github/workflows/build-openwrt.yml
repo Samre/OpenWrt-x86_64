@@ -93,7 +93,11 @@ jobs:
       uses: webfactory/ssh-agent@v0.4.1
       if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
       env:
-        ssh-private-key: ${{ secrets.PRIVATE_SSH_KEY }}
+        ssh-private-key: ${{ secrets.BLOG_DEPLOY_KEY }}
+
+    - name: Scan public keys
+      run: |
+        ssh-keyscan lancitou.net >> ~/.ssh/known_hosts
 
     - name: Download package
       id: package

@@ -92,8 +92,10 @@ jobs:
 
       uses: peaceiris/actions-gh-pages@v3
       if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
-      env:
+      with:
         deploy_key: ${{ secrets.ACTIONS_DEPLOY_KEY }}
+        publish_dir: ./public
+
 
 
     - name: Download package

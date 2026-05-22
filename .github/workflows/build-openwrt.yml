@@ -33,10 +33,8 @@ env:
 
 jobs:
   build:
-    #runs-on: ubuntu-20.04
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     timeout-minutes: 3600
-    
 
     steps:
     - name: Checkout
@@ -46,22 +44,16 @@ jobs:
       env:
         DEBIAN_FRONTEND: noninteractive
       run: |
-        rm -rf /workdir/*
-        cat /etc/apt/sources.list
-        apt-get -qq update
-        apt-get -qq install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev lib32gcc1 libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler
-        apt-get -qq autoremove --purge
-        apt-get -qq clean
-        timedatectl set-timezone "$TZ"
-        mkdir -p /workdir
-        chown $USER:$GROUPS /workdir
+        sudo apt-get -qq update
+        sudo apt-get -qq install build-essential asciidoc binutils bzip2 gawk gettext git libncurses5-dev libz-dev patch python3 unzip zlib1g-dev lib32gcc1 libc6-dev-i386 subversion flex uglifyjs git-core gcc-multilib p7zip p7zip-full msmtp libssl-dev texinfo libglib2.0-dev xmlto qemu-utils upx libelf-dev autoconf automake libtool autopoint device-tree-compiler
+        sudo apt-get -qq autoremove --purge
+        sudo apt-get -qq clean
+        sudo timedatectl set-timezone "$TZ"
 
     - name: Clone source code
-      working-directory: /workdir
       run: |
         df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Load custom feeds
       run: |

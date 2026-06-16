@@ -30,6 +30,7 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        persist-credentials: true
 
     - name: Check for upstream updates
       id: check
@@ -66,5 +67,7 @@ jobs:
       if: steps.check.outputs.changed == 'true'
       run: |
         set -euo pipefail
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
         git tag -f upstream-tracker ${{ steps.check.outputs.latest_sha }}
         git push -f origin upstream-tracker

@@ -17,8 +17,25 @@
 #echo 'src-git helloworld https://github.com/fw876/helloworld' >>feeds.conf.default
 #echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall' >>feeds.conf.default
 
-
 echo "src-git istore https://github.com/linkease/istore;main" >> ./feeds.conf.default
 echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> ./feeds.conf.default
 echo "src-git small https://github.com/kenzok8/small" >> ./feeds.conf.default
 echo "src-git wrtbwmon https://github.com/brvphoenix/wrtbwmon" >> ./feeds.conf.default
+
+# Free up disk space on GitHub Actions runner
+# The runner has ~28GB total; OpenWrt build with many packages easily exceeds this
+echo "=== Before cleanup ==="
+df -hT $PWD
+
+echo "Removing unnecessary pre-installed tools..."
+sudo rm -rf \
+  /usr/local/lib/android \
+  /opt/ghc \
+  /usr/local/.ghcup \
+  /usr/share/dotnet \
+  /usr/local/share/powershell \
+  /usr/local/share/chromium \
+  /usr/local/lib/node_modules 2>/dev/null || true
+
+echo "=== After cleanup ==="
+df -hT $PWD

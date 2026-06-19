@@ -25,52 +25,31 @@ sed -i 's/^CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set/' .config
 
 #5. Fix shortcut-fe kernel module for Linux 6.18+
-#    Linux 6.18 removed transitive includes of <linux/timer.h>,
-#    causing implicit declaration errors for from_timer() and del_timer_sync().
-#    Using OpenWrt patch mechanism so it applies during prepare phase.
-SHORTCUT_FE_DIR="package/qca/shortcut-fe/shortcut-fe"
-if [ -d "$SHORTCUT_FE_DIR" ]; then
-  echo "=== Creating shortcut-fe patches for Linux 6.18+ ==="
-  mkdir -p "$SHORTCUT_FE_DIR/patches"
+#    Linux 6.13+ REMOVED from_timer() and del_timer_sync() entirely.
+#    Replace with container_of() and inline timer_delete_sync().
+#    Also add missing <linux/timer.h> and remove -Werror.
+SHORTCUT_FE_SRC="package/qca/shortcut-fe/shortcut-fe/src"
+if [ -d "$SHORTCUT_FE_SRC" ]; then
+  echo "=== Fixing shortcut-fe for Linux 6.18+ ==="
 
-  # Patch 1: Add missing <linux/timer.h> to sfe_ipv4.c
-  cat > "$SHORTCUT_FE_DIR/patches/001-add-timer-include-ipv4.patch" << 'PATCH_EOF'
---- a/src/sfe_ipv4.c
-+++ b/src/sfe_ipv4.c
-@@ -22,6 +22,7 @@
- #include <linux/icmp.h>
- #include <net/tcp.h>
- #include <linux/etherdevice.h>
-+#include <linux/timer.h>
- #include <linux/version.h>
- 
- #include "sfe.h"
-PATCH_EOF
+  # Add <linux/timer.h> include to sfe_ipv4.c and sfe_ipv6.c
+  for f in "$SHORTCUT_FE_SRC/sfe_ipv4.c" "$SHORTCUT_FE_SRC/sfe_ipv6.c"; do
+    if [ -f "$f" ] && ! grep -q '<linux/timer.h>' "$f"; then
+      sed -i '/#include <linux\/version.h>/i #include <linux/timer.h>' "$f"
+      echo "  Added #include <linux/timer.h> to $f"
+    fi
 
-  # Patch 2: Add missing <linux/timer.h> to sfe_ipv6.c
-  cat > "$SHORTCUT_FE_DIR/patches/002-add-timer-include-ipv6.patch" << 'PATCH_EOF'
---- a/src/sfe_ipv6.c
-+++ b/src/sfe_ipv6.c
-@@ -22,6 +22,7 @@
- #include <linux/icmp.h>
- #include <net/tcp.h>
- #include <linux/etherdevice.h>
-+#include <linux/timer.h>
- #include <linux/version.h>
- 
- #include "sfe.h"
-PATCH_EOF
+    # Replace from_timer() -> container_of() (from_timer was removed in Linux 6.13+)
+    # Pattern: from_timer(si, tl, timer) => container_of(tl, typeof(*si), timer)
+    sed -i 's/from_timer(si, tl, timer)/container_of(tl, typeof(*si), timer)/g' "$f"
+    echo "  Replaced from_timer() -> container_of() in $f"
 
-  # Patch 3: Remove -Werror from src/Makefile
-  cat > "$SHORTCUT_FE_DIR/patches/003-remove-werror.patch" << 'PATCH_EOF'
---- a/src/Makefile
-+++ b/src/Makefile
-@@ -20,4 +20,4 @@ shortcut-fe-cm-objs := \
- 	sfe_cm.o
- 
--ccflags-y += -Werror -Wall
-+ccflags-y += -Wall
-PATCH_EOF
+    # Replace del_timer_sync() -> timer_delete_sync() (removed in Linux 6.13+)
+    sed -i 's/del_timer_sync(&si->timer)/timer_delete_sync(\&si->timer)/g' "$f"
+    echo "  Replaced del_timer_sync() -> timer_delete_sync() in $f"
+  done
 
-  echo "  3 patch files created in $SHORTCUT_FE_DIR/patches/"
+  # Remove -Werror to avoid deprecation warnings becoming errors
+  sed -i 's/-Werror/-Wno-deprecated-declarations/g' "$SHORTCUT_FE_SRC/Makefile"
+  echo "  Replaced -Werror with -Wno-deprecated-declarations in src/Makefile"
 fi

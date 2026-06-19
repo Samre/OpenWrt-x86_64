@@ -127,7 +127,39 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: Compile the firmware
+    
+    - name: Fix shortcut-fe for Linux 6.18+
+      run: |
+        set -euo pipefail
+        cd openwrt
+        SHORTCUT_FE_SRC="package/qca/shortcut-fe/shortcut-fe/src"
+        if [ -d "$SHORTCUT_FE_SRC" ]; then
+          echo "=== Patching shortcut-fe for Linux 6.18+ ==="
+
+          for f in "$SHORTCUT_FE_SRC/sfe_ipv4.c" "$SHORTCUT_FE_SRC/sfe_ipv6.c"; do
+            [ -f "$f" ] || continue
+
+            # Add <linux/timer.h>
+            grep -q '<linux/timer.h>' "$f" || sed -i '/#include <linux\/version.h>/i #include <linux/timer.h>' "$f"
+
+            # from_timer() removed in Linux 6.13+, use container_of()
+            sed -i 's/from_timer(si, tl, timer)/container_of(tl, typeof(*si), timer)/g' "$f"
+
+            # del_timer_sync() removed in Linux 6.13+, use timer_delete_sync()
+            sed -i 's/del_timer_sync(&si->timer)/timer_delete_sync(\&si->timer)/g' "$f"
+
+            echo "  Patched $f"
+          done
+
+          # Replace -Werror
+          sed -i 's/-Werror/-Wno-deprecated-declarations/g' "$SHORTCUT_FE_SRC/Makefile"
+          echo "  Patched src/Makefile"
+
+          # Clear build cache to force re-prepare
+          rm -rf build_dir/target-*/linux-*/shortcut-fe 2>/dev/null || true
+          echo "  Cleared build cache for shortcut-fe"
+        fi
+- name: Compile the firmware
       id: compile
       run: |
         set -euo pipefail

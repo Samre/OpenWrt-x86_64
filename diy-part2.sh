@@ -25,3 +25,25 @@ sed -i 's|PKG_SOURCE_URL:=https://github.com/linkease/ddnsto-openwrt-package/raw
 sed -i 's/^CONFIG_PACKAGE_haproxy=y/# CONFIG_PACKAGE_haproxy is not set/' .config
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy is not set/' .config
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set/' .config
+
+#5. Fix shortcut-fe kernel module for Linux 6.18+
+#    Linux 6.18 removed transitive includes of <linux/timer.h>,
+#    causing implicit declaration errors for from_timer() and del_timer_sync().
+#    Ref: sfe_ipv4.c:2868 / sfe_ipv6.c:2876 (from_timer)
+#         sfe_ipv4.c:3588 / sfe_ipv6.c:3596 (del_timer_sync)
+SHORTCUT_FE_SRC="package/qca/shortcut-fe/shortcut-fe/src"
+if [ -d "$SHORTCUT_FE_SRC" ]; then
+  echo "=== Fixing shortcut-fe for Linux 6.18+ ==="
+
+  # Add missing <linux/timer.h> include (from_timer, del_timer_sync)
+  for f in "$SHORTCUT_FE_SRC/sfe_ipv4.c" "$SHORTCUT_FE_SRC/sfe_ipv6.c"; do
+    if [ -f "$f" ] && ! grep -q '<linux/timer.h>' "$f"; then
+      sed -i '/#include <linux\/version.h>/a #include <linux/timer.h>' "$f"
+      echo "  Added #include <linux/timer.h> to $f"
+    fi
+  done
+
+  # Remove -Werror to avoid deprecation warnings becoming errors
+  sed -i 's/-Werror//g' "$SHORTCUT_FE_SRC/Makefile"
+  echo "  Removed -Werror from shortcut-fe src/Makefile"
+fi

@@ -145,6 +145,9 @@ jobs:
           # Add -DSFE_SUPPORT_IPV6 so sfe_cm.h uses extern declarations not inline stubs
           grep -q 'DSFE_SUPPORT_IPV6' "$SRC/Makefile" || sed -i '/^ccflags-y/s/$/ -DSFE_SUPPORT_IPV6/' "$SRC/Makefile"
           rm -rf build_dir/target-*/linux-*/shortcut-fe 2>/dev/null || true
+          # Fix sfe_cm.c: tcp_no_window_check removed from struct nf_tcp_net in Linux 6.18+
+          sed -i 's/tn->tcp_no_window_check)/0) \/* tcp_no_window_check removed in Linux 6.18+ *\//' "$SRC/sfe_cm.c"
+          echo "  Patched sfe_cm.c"
           echo "  Done - build cache cleared"
         fi
 

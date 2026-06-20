@@ -22,6 +22,13 @@ echo "src-git kenzo https://github.com/kenzok8/openwrt-packages" >> ./feeds.conf
 echo "src-git small https://github.com/kenzok8/small" >> ./feeds.conf.default
 echo "src-git wrtbwmon https://github.com/brvphoenix/wrtbwmon" >> ./feeds.conf.default
 
+# 6. Add tunnel/intranet penetration feeds (内网穿透)
+echo "src-git frp https://github.com/kuoruan/openwrt-frp;master" >> ./feeds.conf.default
+echo "src-git zerotier https://github.com/mwarning/zerotier-openwrt;master" >> ./feeds.conf.default
+echo "src-git tailscale https://github.com/adyanth/openwrt-tailscale-enabler;master" >> ./feeds.conf.default
+echo "src-git natmap https://github.com/muink/openwrt-natmap;master" >> ./feeds.conf.default
+echo "src-git lucky https://github.com/gdy666/luci-app-lucky;main" >> ./feeds.conf.default
+
 # Free up disk space on GitHub Actions runner
 # The runner has ~28GB total; OpenWrt build with many packages easily exceeds this
 echo "=== Before cleanup ==="

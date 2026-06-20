@@ -24,10 +24,17 @@ sed -i 's/^CONFIG_PACKAGE_haproxy=y/# CONFIG_PACKAGE_haproxy is not set/' .confi
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy is not set/' .config
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set/' .config
 
-#5. Disable packages that fail to compile with Linux 6.18+
-sed -i 's/^CONFIG_PACKAGE_mihomo=y/# CONFIG_PACKAGE_mihomo is not set/' .config
-sed -i 's/^CONFIG_PACKAGE_kmod-sound-hda-codec-realtek=y/# CONFIG_PACKAGE_kmod-sound-hda-codec-realtek is not set/' .config
-sed -i 's/^CONFIG_PACKAGE_kmod-sound-core=y/# CONFIG_PACKAGE_kmod-sound-core is not set/' .config
+#5. Remove packages that fail to compile with Linux 6.18+
+#    These are auto-selected as dependencies, so sed on .config doesn't work.
+#    We must physically remove the package dirs before compilation.
+echo "=== Removing problematic packages ==="
+rm -rf feeds/small/mihomo 2>/dev/null && echo "  Removed mihomo" || echo "  mihomo not found"
+# Disable kernel sound modules that fail on Linux 6.18
+echo "# CONFIG_PACKAGE_kmod-sound-hda-codec-realtek is not set" >> .config
+echo "# CONFIG_PACKAGE_kmod-sound-core is not set" >> .config
+echo "# CONFIG_PACKAGE_kmod-sound-hda-core is not set" >> .config
+echo "# CONFIG_PACKAGE_kmod-sound-hda-codec-hdmi is not set" >> .config
+echo "  Disabled kmod-sound-* in .config"
 
 #6. Fix shortcut-fe kernel module for Linux 6.18+
 #    Linux 6.13+ REMOVED from_timer() and del_timer_sync() entirely.
@@ -63,3 +70,4 @@ if [ -d "$SHORTCUT_FE_SRC" ]; then
   echo "  Patched sfe_cm.c"
   echo "  Done - build cache cleared"
 fi
+

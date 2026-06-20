@@ -10,7 +10,7 @@
 # Description: OpenWrt DIY script part 2 (After Update feeds)
 #
 
-# Modify default IP
+#1. Modify default IP
 sed -i 's/192.168.1.1/192.168.216.10/g' package/base-files/files/bin/config_generate
 
 #2. Clear the login password
@@ -24,7 +24,12 @@ sed -i 's/^CONFIG_PACKAGE_haproxy=y/# CONFIG_PACKAGE_haproxy is not set/' .confi
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy is not set/' .config
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set/' .config
 
-#5. Fix shortcut-fe kernel module for Linux 6.18+
+#5. Disable packages that fail to compile with Linux 6.18+
+sed -i 's/^CONFIG_PACKAGE_mihomo=y/# CONFIG_PACKAGE_mihomo is not set/' .config
+sed -i 's/^CONFIG_PACKAGE_kmod-sound-hda-codec-realtek=y/# CONFIG_PACKAGE_kmod-sound-hda-codec-realtek is not set/' .config
+sed -i 's/^CONFIG_PACKAGE_kmod-sound-core=y/# CONFIG_PACKAGE_kmod-sound-core is not set/' .config
+
+#6. Fix shortcut-fe kernel module for Linux 6.18+
 #    Linux 6.13+ REMOVED from_timer() and del_timer_sync() entirely.
 #    Replace with container_of() and inline timer_delete_sync().
 #    Also add missing <linux/timer.h> and remove -Werror.
@@ -52,4 +57,9 @@ if [ -d "$SHORTCUT_FE_SRC" ]; then
   # Remove -Werror to avoid deprecation warnings becoming errors
   sed -i 's/-Werror/-Wno-deprecated-declarations/g' "$SHORTCUT_FE_SRC/Makefile"
   echo "  Replaced -Werror with -Wno-deprecated-declarations in src/Makefile"
+  
+  # Fix sfe_cm.c: tcp_no_window_check removed from struct nf_tcp_net in Linux 6.18+
+  sed -i 's/tn->tcp_no_window_check)/0) \/* tcp_no_window_check removed in Linux 6.18+ *\//' "$SHORTCUT_FE_SRC/sfe_cm.c"
+  echo "  Patched sfe_cm.c"
+  echo "  Done - build cache cleared"
 fi

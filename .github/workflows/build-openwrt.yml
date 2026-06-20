@@ -142,6 +142,8 @@ jobs:
             echo "  Patched $f"
           done
           sed -i 's/-Werror/-Wno-deprecated-declarations/g' "$SRC/Makefile"
+          # Add -DSFE_SUPPORT_IPV6 so sfe_cm.h uses extern declarations not inline stubs
+          grep -q 'DSFE_SUPPORT_IPV6' "$SRC/Makefile" || sed -i '/^ccflags-y/s/$/ -DSFE_SUPPORT_IPV6/' "$SRC/Makefile"
           rm -rf build_dir/target-*/linux-*/shortcut-fe 2>/dev/null || true
           echo "  Done - build cache cleared"
         fi

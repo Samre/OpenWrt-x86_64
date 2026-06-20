@@ -1,0 +1,17 @@
+﻿#!/bin/sh
+uci -q batch <<EOF
+set ai-monitor.general=general
+set ai-monitor.general.check_interval=600
+set ai-monitor.ai=ai
+set ai-monitor.ai.api_url=https://api.deepseek.com/chat/completions
+set ai-monitor.ai.model=deepseek-chat
+set ai-monitor.push=push
+set ai-monitor.push.type=serverchan
+set ai-monitor.thresholds=thresholds
+set ai-monitor.thresholds.cpu=80
+set ai-monitor.thresholds.memory=85
+set ai-monitor.thresholds.disk=90
+set ai-monitor.thresholds.temperature=75
+commit ai-monitor
+EOF
+exit 0

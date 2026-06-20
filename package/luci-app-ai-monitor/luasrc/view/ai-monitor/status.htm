@@ -1,0 +1,44 @@
+﻿<%+header%>
+<h2><%:AI Monitor Status%></h2>
+
+<%
+local stat = luci.sys.exec("/usr/bin/ai-monitor.sh --test 2>/dev/null")
+local running = luci.sys.call("pgrep -f ai-monitor.sh >/dev/null") == 0
+%>
+
+<div class="cbi-section">
+    <h3><%:Service Status%></h3>
+    <div class="cbi-value">
+        <label class="cbi-value-title"><%:Running%></label>
+        <div class="cbi-value-field">
+            <% if running then %>
+                <span style="color:green;font-weight:bold"><%:Active%></span>
+            <% else %>
+                <span style="color:red;font-weight:bold"><%:Stopped%></span>
+            <% end %>
+        </div>
+    </div>
+</div>
+
+<div class="cbi-section">
+    <h3><%:System Snapshot%></h3>
+    <pre style="background:#1a1a2e;color:#e0e0e0;padding:15px;border-radius:6px;font-size:13px;line-height:1.6"><%=stat%></pre>
+</div>
+
+<div class="cbi-section">
+    <h3><%:Quick Actions%></h3>
+    <input type="button" class="cbi-button cbi-button-apply" value="<%:Restart Service%>" onclick="location.href='<%=url('admin/services/ai-monitor/status')%>?action=restart'"/>
+    <input type="button" class="cbi-button cbi-button-reset" value="<%:Test AI Connection%>" onclick="location.href='<%=url('admin/services/ai-monitor/status')%>?action=test'"/>
+</div>
+
+<%
+if luci.http.formvalue("action") == "restart" then
+    luci.sys.call("/etc/init.d/ai-monitor restart >/dev/null 2>&1")
+    luci.http.redirect(luci.dispatcher.build_url("admin/services/ai-monitor/status"))
+end
+if luci.http.formvalue("action") == "test" then
+    luci.sys.call("/usr/bin/ai-monitor.sh --once >/dev/null 2>&1")
+end
+%>
+
+<%+footer%>

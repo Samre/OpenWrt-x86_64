@@ -1,0 +1,15 @@
+﻿<%+header%>
+<h2><%:AI Monitor Log%></h2>
+<div class="cbi-section">
+    <pre style="background:#1a1a2e;color:#e0e0e0;padding:15px;border-radius:6px;font-size:12px;line-height:1.5;max-height:500px;overflow:auto"><%=log or "<%:No log data%>"%></pre>
+</div>
+<div class="cbi-section">
+    <input type="button" class="cbi-button cbi-button-reset" value="<%:Clear Log%>" onclick="location.href='<%=url('admin/services/ai-monitor/log')%>?action=clear'"/>
+</div>
+<%
+if luci.http.formvalue("action") == "clear" then
+    luci.sys.call("echo '' > /var/log/ai-monitor.log")
+    luci.http.redirect(luci.dispatcher.build_url("admin/services/ai-monitor/log"))
+end
+%>
+<%+footer%>

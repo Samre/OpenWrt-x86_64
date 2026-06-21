@@ -24,39 +24,27 @@ sed -i 's/^CONFIG_PACKAGE_haproxy=y/# CONFIG_PACKAGE_haproxy is not set/' .confi
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy is not set/' .config
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set/' .config
 
-#5. Remove packages that fail to compile with Linux 6.18+
-echo "=== Removing problematic packages ==="
-for pkg in mihomo trojan-go docker-compose mosdns; do
-    find feeds -name "$pkg" -type d 2>/dev/null | while read d; do
-        echo "  Removing $d"
-        rm -rf "$d"
-    done
-done
-
-#6. Disable kernel sound modules (broken on Linux 6.18)
+#5. Disable kernel sound modules (Linux 6.18 kernel API changed)
 cat >> .config <<EOF
 # CONFIG_PACKAGE_kmod-sound-hda-codec-realtek is not set
 # CONFIG_PACKAGE_kmod-sound-core is not set
 # CONFIG_PACKAGE_kmod-sound-hda-core is not set
 # CONFIG_PACKAGE_kmod-sound-hda-codec-hdmi is not set
 EOF
-echo "  Disabled kmod-sound-* in .config"
+echo "  Disabled kmod-sound-* (Linux 6.18 compat)"
 
-#7. Fix shortcut-fe kernel module for Linux 6.18+
+#6. Fix shortcut-fe kernel module for Linux 6.18+
 SHORTCUT_FE_SRC="package/qca/shortcut-fe/shortcut-fe/src"
 if [ -d "$SHORTCUT_FE_SRC" ]; then
   echo "=== Fixing shortcut-fe for Linux 6.18+ ==="
   for f in "$SHORTCUT_FE_SRC/sfe_ipv4.c" "$SHORTCUT_FE_SRC/sfe_ipv6.c"; do
     if [ -f "$f" ] && ! grep -q '<linux/timer.h>' "$f"; then
       sed -i '/#include <linux\/version.h>/i #include <linux/timer.h>' "$f"
-      echo "  Added #include <linux/timer.h> to $f"
     fi
     sed -i 's/from_timer(si, tl, timer)/container_of(tl, typeof(*si), timer)/g' "$f"
     sed -i 's/del_timer_sync(&si->timer)/timer_delete_sync(\&si->timer)/g' "$f"
-    echo "  Patched $f"
   done
   sed -i 's/-Werror/-Wno-deprecated-declarations/g' "$SHORTCUT_FE_SRC/Makefile"
-  sed -i 's/tn->tcp_no_window_check)/0) \/* tcp_no_window_check removed in Linux 6.18+ *\//' "$SHORTCUT_FE_SRC/sfe_cm.c"
-  echo "  Patched sfe_cm.c"
+  sed -i 's/tn->tcp_no_window_check)/0) \/* Linux 6.18+ *\//' "$SHORTCUT_FE_SRC/sfe_cm.c"
   echo "  Done"
 fi

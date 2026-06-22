@@ -147,26 +147,11 @@ jobs:
         
         # Fix 1: kmod-sound-hda-codec-realtek - missing snd-hda-codec-realtek-lib.ko on Linux 6.18+
         echo "=== Fixing kmod-sound-hda-codec-realtek ==="
-        # Add to kernel config directly
         echo "CONFIG_SND_HDA_CODEC_REALTEK_LIB=m" >> .config
         echo "CONFIG_SND_HDA_CODEC_REALTEK_LIB=m" >> target/linux/x86/64/config-6.18 2>/dev/null || true
-        echo "CONFIG_SND_HDA_CODEC_REALTEK_LIB=m" >> target/linux/generic/config-6.18 2>/dev/null || true
-        make kernel_oldconfig V=s 2>&1 | tail -20 || true
-        echo "  kmod-sound fix applied"
+        echo "  kmod-sound CONFIG added"
         
-        # Fix 2: Go packages (mihomo, trojan-go) - use system Go with proper env
-        echo "=== Fixing Go build environment ==="
-        export GO111MODULE=on
-        export GOFLAGS="-buildvcs=false -mod=mod"
-        export GONOSUMDB="*"
-        export GONOSUMCHECK="*"
-        export GOMODCACHE="$PWD/dl/go-mod-cache"
-        export GOEXPERIMENT=""
-        # Ensure GOPROXY is reachable
-        echo "  GOPROXY=$GOPROXY"
-        echo "  GOFLAGS=$GOFLAGS"
-        
-        # Fix 3: shortcut-fe for Linux 6.18+
+        # Fix 2: shortcut-fe for Linux 6.18+
         echo "=== Patching shortcut-fe ==="
         SRC="package/qca/shortcut-fe/shortcut-fe/src"
         if [ -d "$SRC" ]; then

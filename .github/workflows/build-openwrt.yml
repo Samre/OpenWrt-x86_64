@@ -64,9 +64,12 @@ jobs:
         sudo timedatectl set-timezone "$TZ"
 
     - name: Clone source code
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
         df -hT $PWD
+        git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
         for i in 1 2 3; do git clone $REPO_URL -b $REPO_BRANCH openwrt && break || sleep 30; done
 
     - name: Restore ccache
@@ -88,9 +91,13 @@ jobs:
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
     - name: Update feeds
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
-        cd openwrt && ./scripts/feeds update -a
+        cd openwrt
+        git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+        for i in 1 2 3; do ./scripts/feeds update -a && break || sleep 30; done
 
     - name: Install feeds
       run: |

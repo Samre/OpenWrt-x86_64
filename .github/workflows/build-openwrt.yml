@@ -34,12 +34,13 @@ env:
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
-  GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
+  GOPROXY: https://proxy.golang.org,direct
   GOSUMDB: sum.golang.org
   GO111MODULE: on
   GOFLAGS: -buildvcs=false -mod=mod
   GONOSUMDB: "*"
   GONOSUMCHECK: "*"
+  GOINSECURE: "*"
 
 jobs:
   build:

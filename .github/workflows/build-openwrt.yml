@@ -36,6 +36,10 @@ env:
   TZ: Asia/Shanghai
   GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
   GOSUMDB: sum.golang.org
+  GO111MODULE: on
+  GOFLAGS: -buildvcs=false
+  GONOSUMDB: "*"
+  GONOSUMCHECK: "*"
 
 jobs:
   build:
@@ -136,30 +140,55 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
-    - name: Fix shortcut-fe for Linux 6.18+
+    - name: Fix build issues
       run: |
         set -euo pipefail
         cd openwrt
+        
+        # Fix 1: kmod-sound-hda-codec-realtek - missing snd-hda-codec-realtek-lib.ko on Linux 6.18+
+        echo "=== Fixing kmod-sound-hda-codec-realtek ==="
+        TARGET_CFG="target/linux/x86/64/config-6.18"
+        if [ -f "$TARGET_CFG" ]; then
+          grep -q "CONFIG_SND_HDA_CODEC_REALTEK_LIB" "$TARGET_CFG" || echo "CONFIG_SND_HDA_CODEC_REALTEK_LIB=m" >> "$TARGET_CFG"
+          echo "  Added CONFIG_SND_HDA_CODEC_REALTEK_LIB=m"
+        fi
+        # Fallback: also check config-default
+        TARGET_CFG2="target/linux/x86/64/config-default"
+        if [ -f "$TARGET_CFG2" ]; then
+          grep -q "CONFIG_SND_HDA_CODEC_REALTEK_LIB" "$TARGET_CFG2" || echo "CONFIG_SND_HDA_CODEC_REALTEK_LIB=m" >> "$TARGET_CFG2"
+          echo "  Added CONFIG_SND_HDA_CODEC_REALTEK_LIB=m to config-default"
+        fi
+        
+        # Fix 2: mihomo Go build - ensure Go env is correct
+        echo "=== Setting Go environment ==="
+        export GO111MODULE=on
+        export GOFLAGS="-buildvcs=false"
+        export GOMODCACHE="$PWD/dl/go-mod-cache"
+        export GONOSUMDB="*"
+        export GONOSUMCHECK="*"
+        echo "  GO111MODULE=$GO111MODULE"
+        echo "  GOFLAGS=$GOFLAGS"
+        echo "  GOPROXY=$GOPROXY"
+        echo "  GOSUMDB=$GOSUMDB"
+        
+        # Fix 3: shortcut-fe for Linux 6.18+
+        echo "=== Patching shortcut-fe ==="
         SRC="package/qca/shortcut-fe/shortcut-fe/src"
         if [ -d "$SRC" ]; then
-          echo "=== Patching shortcut-fe ==="
           for f in "$SRC/sfe_ipv4.c" "$SRC/sfe_ipv6.c"; do
             [ -f "$f" ] || continue
-            grep -q '<linux/timer.h>' "$f" || sed -i '/#include <linux\/version.h>/i #include <linux/timer.h>' "$f"
-            sed -i 's/from_timer(si, tl, timer)/container_of(tl, typeof(*si), timer)/g' "$f"
-            sed -i 's/del_timer_sync(&si->timer)/timer_delete_sync(\&si->timer)/g' "$f"
+            grep -q "<linux/timer.h>" "$f" || sed -i "/#include <linux\\/version.h>/i #include <linux/timer.h>" "$f"
+            sed -i "s/from_timer(si, tl, timer)/container_of(tl, typeof(*si), timer)/g" "$f"
+            sed -i "s/del_timer_sync(&si->timer)/timer_delete_sync(\\&si->timer)/g" "$f"
             echo "  Patched $f"
           done
-          sed -i 's/-Werror/-Wno-deprecated-declarations/g' "$SRC/Makefile"
-          # Add -DSFE_SUPPORT_IPV6 so sfe_cm.h uses extern declarations not inline stubs
-          grep -q 'DSFE_SUPPORT_IPV6' "$SRC/Makefile" || sed -i '/^ccflags-y/s/$/ -DSFE_SUPPORT_IPV6/' "$SRC/Makefile"
+          sed -i "s/-Werror/-Wno-deprecated-declarations/g" "$SRC/Makefile"
+          grep -q "DSFE_SUPPORT_IPV6" "$SRC/Makefile" || sed -i "/^ccflags-y/s/$/ -DSFE_SUPPORT_IPV6/" "$SRC/Makefile"
           rm -rf build_dir/target-*/linux-*/shortcut-fe 2>/dev/null || true
-          # Fix sfe_cm.c: tcp_no_window_check removed from struct nf_tcp_net in Linux 6.18+
-          sed -i 's/tn->tcp_no_window_check)/0) \/* tcp_no_window_check removed in Linux 6.18+ *\//' "$SRC/sfe_cm.c"
+          sed -i "s/tn->tcp_no_window_check)/0) \\/* tcp_no_window_check removed in Linux 6.18+ *\\//" "$SRC/sfe_cm.c"
           echo "  Patched sfe_cm.c"
-          echo "  Done - build cache cleared"
         fi
-
+        echo "  All build fixes applied"
     - name: Compile the firmware
       id: compile
       run: |

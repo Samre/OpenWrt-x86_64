@@ -34,6 +34,8 @@ env:
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
+  GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
+  GOSUMDB: sum.golang.org
 
 jobs:
   build:

@@ -24,25 +24,7 @@ sed -i 's/^CONFIG_PACKAGE_haproxy=y/# CONFIG_PACKAGE_haproxy is not set/' .confi
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy is not set/' .config
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set/' .config
 
-#5. Remove packages with genuine compile bugs
-echo "=== Removing buggy packages ==="
-for pkg in mihomo docker-compose trojan-go mosdns; do
-    find feeds -name "$pkg" -type d 2>/dev/null | while read d; do
-        echo "  Removing $d"
-        rm -rf "$d"
-    done
-done
-
-#6. Disable kernel sound modules (Linux 6.18 kernel API changed)
-cat >> .config <<EOF
-# CONFIG_PACKAGE_kmod-sound-hda-codec-realtek is not set
-# CONFIG_PACKAGE_kmod-sound-core is not set
-# CONFIG_PACKAGE_kmod-sound-hda-core is not set
-# CONFIG_PACKAGE_kmod-sound-hda-codec-hdmi is not set
-EOF
-echo "  Disabled kmod-sound-* (Linux 6.18 compat)"
-
-#6. Fix shortcut-fe kernel module for Linux 6.18+
+#5. Fix shortcut-fe kernel module for Linux 6.18+
 SHORTCUT_FE_SRC="package/qca/shortcut-fe/shortcut-fe/src"
 if [ -d "$SHORTCUT_FE_SRC" ]; then
   echo "=== Fixing shortcut-fe for Linux 6.18+ ==="
@@ -57,3 +39,12 @@ if [ -d "$SHORTCUT_FE_SRC" ]; then
   sed -i 's/tn->tcp_no_window_check)/0) \/* Linux 6.18+ *\//' "$SHORTCUT_FE_SRC/sfe_cm.c"
   echo "  Done"
 fi
+
+#6. Disable kernel sound modules (Linux 6.18 API changed)
+cat >> .config <<EOF
+# CONFIG_PACKAGE_kmod-sound-hda-codec-realtek is not set
+# CONFIG_PACKAGE_kmod-sound-core is not set
+# CONFIG_PACKAGE_kmod-sound-hda-core is not set
+# CONFIG_PACKAGE_kmod-sound-hda-codec-hdmi is not set
+EOF
+echo "  Disabled kmod-sound-* (Linux 6.18)"

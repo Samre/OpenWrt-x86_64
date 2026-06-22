@@ -29,6 +29,13 @@ echo "src-git tailscale https://github.com/adyanth/openwrt-tailscale-enabler;mai
 echo "src-git natmap https://github.com/muink/openwrt-natmap;master" >> ./feeds.conf.default
 echo "src-git lucky https://github.com/gdy666/luci-app-lucky;main" >> ./feeds.conf.default
 
+
+# 7. Fix Go module downloads (proxy.golang.org unreliable from GitHub Actions)
+export GOPROXY="https://goproxy.cn,https://proxy.golang.org,direct"
+export GOSUMDB="sum.golang.org"
+export GO111MODULE="on"
+echo "GOPROXY=$GOPROXY"
+
 # Free up disk space on GitHub Actions runner
 # The runner has ~28GB total; OpenWrt build with many packages easily exceeds this
 echo "=== Before cleanup ==="

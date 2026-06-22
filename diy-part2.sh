@@ -26,7 +26,7 @@ sed -i 's/^CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_l
 
 #5. Remove packages with genuine compile bugs
 echo "=== Removing buggy packages ==="
-for pkg in mihomo docker-compose; do
+for pkg in mihomo docker-compose trojan-go mosdns; do
     find feeds -name "$pkg" -type d 2>/dev/null | while read d; do
         echo "  Removing $d"
         rm -rf "$d"

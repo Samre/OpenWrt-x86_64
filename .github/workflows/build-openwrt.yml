@@ -65,7 +65,7 @@ jobs:
       run: |
         set -euo pipefail
         df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        for i in 1 2 3; do git clone $REPO_URL -b $REPO_BRANCH openwrt && break || sleep 30; done
 
     - name: Restore ccache
       id: ccache-restore

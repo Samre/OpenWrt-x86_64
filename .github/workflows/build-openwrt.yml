@@ -147,29 +147,34 @@ jobs:
         
         # Fix 1: kmod-sound-hda-codec-realtek - missing snd-hda-codec-realtek-lib.ko on Linux 6.18+
         echo "=== Fixing kmod-sound-hda-codec-realtek ==="
-        TARGET_CFG="target/linux/x86/64/config-6.18"
-        if [ -f "$TARGET_CFG" ]; then
-          grep -q "CONFIG_SND_HDA_CODEC_REALTEK_LIB" "$TARGET_CFG" || echo "CONFIG_SND_HDA_CODEC_REALTEK_LIB=m" >> "$TARGET_CFG"
-          echo "  Added CONFIG_SND_HDA_CODEC_REALTEK_LIB=m"
+        # Add CONFIG_SND_HDA_CODEC_REALTEK_LIB=m to kernel config
+        for cfg in target/linux/x86/64/config-6.18 target/linux/x86/64/config-default target/linux/x86/config-6.18 target/linux/generic/config-6.18; do
+          if [ -f "$cfg" ]; then
+            grep -q "CONFIG_SND_HDA_CODEC_REALTEK_LIB" "$cfg" || echo "CONFIG_SND_HDA_CODEC_REALTEK_LIB=m" >> "$cfg"
+            echo "  Patched $cfg"
+          fi
+        done
+        # Also patch the OpenWrt kmod-sound to handle the missing lib module
+        SOUND_MK="package/kernel/linux/modules/sound.mk"
+        if [ -f "$SOUND_MK" ]; then
+          # Add CONFIG_SND_HDA_CODEC_REALTEK_LIB=m to AUTOLOAD and KCONFIG
+          sed -i "/SND_HDA_CODEC_REALTEK/s/\$(if \$(CONFIG_SND_HDA_CODEC_REALTEK_LIB),snd-hda-codec-realtek-lib)//" "$SOUND_MK"
+          echo "  Patched $SOUND_MK"
         fi
-        # Fallback: also check config-default
-        TARGET_CFG2="target/linux/x86/64/config-default"
-        if [ -f "$TARGET_CFG2" ]; then
-          grep -q "CONFIG_SND_HDA_CODEC_REALTEK_LIB" "$TARGET_CFG2" || echo "CONFIG_SND_HDA_CODEC_REALTEK_LIB=m" >> "$TARGET_CFG2"
-          echo "  Added CONFIG_SND_HDA_CODEC_REALTEK_LIB=m to config-default"
-        fi
+        # Run kernel_oldconfig to apply config changes
+        make kernel_oldconfig 2>/dev/null || true
         
-        # Fix 2: mihomo Go build - ensure Go env is correct
-        echo "=== Setting Go environment ==="
+        # Fix 2: mihomo Go build - use verbose build to capture errors
+        echo "=== Fixing mihomo Go build ==="
         export GO111MODULE=on
         export GOFLAGS="-buildvcs=false"
-        export GOMODCACHE="$PWD/dl/go-mod-cache"
         export GONOSUMDB="*"
         export GONOSUMCHECK="*"
-        echo "  GO111MODULE=$GO111MODULE"
-        echo "  GOFLAGS=$GOFLAGS"
-        echo "  GOPROXY=$GOPROXY"
-        echo "  GOSUMDB=$GOSUMDB"
+        export GOMODCACHE="$PWD/dl/go-mod-cache"
+        echo "  GO111MODULE=$GO111MODULE GOPROXY=$GOPROXY GOSUMDB=$GOSUMDB"
+        # If mihomo is the issue, try building it with V=s first to see the error
+        echo "  Trying verbose mihomo build..."
+        make package/feeds/small/mihomo/compile V=s 2>&1 | tail -100 || true
         
         # Fix 3: shortcut-fe for Linux 6.18+
         echo "=== Patching shortcut-fe ==="

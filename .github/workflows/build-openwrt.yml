@@ -145,38 +145,17 @@ jobs:
         set -euo pipefail
         cd openwrt
         
-        # Fix 1: kmod-sound-hda-codec-realtek - missing snd-hda-codec-realtek-lib.ko on Linux 6.18+
+        # Fix 1: kmod-sound-hda-codec-realtek missing snd-hda-codec-realtek-lib.ko on Linux 6.18+
         echo "=== Fixing kmod-sound-hda-codec-realtek ==="
-        # Add CONFIG_SND_HDA_CODEC_REALTEK_LIB=m to kernel config
-        for cfg in target/linux/x86/64/config-6.18 target/linux/x86/64/config-default target/linux/x86/config-6.18 target/linux/generic/config-6.18; do
-          if [ -f "$cfg" ]; then
-            grep -q "CONFIG_SND_HDA_CODEC_REALTEK_LIB" "$cfg" || echo "CONFIG_SND_HDA_CODEC_REALTEK_LIB=m" >> "$cfg"
-            echo "  Patched $cfg"
-          fi
-        done
-        # Also patch the OpenWrt kmod-sound to handle the missing lib module
         SOUND_MK="package/kernel/linux/modules/sound.mk"
         if [ -f "$SOUND_MK" ]; then
-          # Add CONFIG_SND_HDA_CODEC_REALTEK_LIB=m to AUTOLOAD and KCONFIG
-          sed -i "/SND_HDA_CODEC_REALTEK/s/\$(if \$(CONFIG_SND_HDA_CODEC_REALTEK_LIB),snd-hda-codec-realtek-lib)//" "$SOUND_MK"
-          echo "  Patched $SOUND_MK"
+          # Add CONFIG_SND_HDA_CODEC_REALTEK_LIB to KCONFIG (Linux 6.18+ split the module)
+          sed -i "/CONFIG_SND_HDA_CODEC_REALTEK$/a\\\\tCONFIG_SND_HDA_CODEC_REALTEK_LIB" "$SOUND_MK"
+          echo "  Patched $SOUND_MK - added CONFIG_SND_HDA_CODEC_REALTEK_LIB"
+          grep -A2 "CONFIG_SND_HDA_CODEC_REALTEK" "$SOUND_MK" || true
         fi
-        # Run kernel_oldconfig to apply config changes
-        make kernel_oldconfig 2>/dev/null || true
         
-        # Fix 2: mihomo Go build - use verbose build to capture errors
-        echo "=== Fixing mihomo Go build ==="
-        export GO111MODULE=on
-        export GOFLAGS="-buildvcs=false"
-        export GONOSUMDB="*"
-        export GONOSUMCHECK="*"
-        export GOMODCACHE="$PWD/dl/go-mod-cache"
-        echo "  GO111MODULE=$GO111MODULE GOPROXY=$GOPROXY GOSUMDB=$GOSUMDB"
-        # If mihomo is the issue, try building it with V=s first to see the error
-        echo "  Trying verbose mihomo build..."
-        make package/feeds/small/mihomo/compile V=s 2>&1 | tail -100 || true
-        
-        # Fix 3: shortcut-fe for Linux 6.18+
+        # Fix 2: shortcut-fe for Linux 6.18+
         echo "=== Patching shortcut-fe ==="
         SRC="package/qca/shortcut-fe/shortcut-fe/src"
         if [ -d "$SRC" ]; then
@@ -184,7 +163,7 @@ jobs:
             [ -f "$f" ] || continue
             grep -q "<linux/timer.h>" "$f" || sed -i "/#include <linux\\/version.h>/i #include <linux/timer.h>" "$f"
             sed -i "s/from_timer(si, tl, timer)/container_of(tl, typeof(*si), timer)/g" "$f"
-            sed -i "s/del_timer_sync(&si->timer)/timer_delete_sync(\\&si->timer)/g" "$f"
+            sed -i "s/del_timer_sync(\&si->timer)/timer_delete_sync(\\\\&si->timer)/g" "$f"
             echo "  Patched $f"
           done
           sed -i "s/-Werror/-Wno-deprecated-declarations/g" "$SRC/Makefile"

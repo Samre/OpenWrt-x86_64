@@ -141,43 +141,14 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
+
     - name: Fix build issues
       run: |
         set -euo pipefail
         cd openwrt
-        
-        # Fix 1: kmod-sound-hda-codec-realtek - missing snd-hda-codec-realtek-lib.ko on Linux 6.18+
-        echo "=== Fixing kmod-sound-hda-codec-realtek ==="
-        # Use scripts/config to non-interactively enable the kernel option
-        scripts/config -e CONFIG_SND_HDA_CODEC_REALTEK_LIB 2>/dev/null || true
-        echo "CONFIG_SND_HDA_CODEC_REALTEK_LIB=m" >> .config
-        # Also add to kernel target config (gets merged by make defconfig)
-        for cfg in target/linux/x86/64/config-6.18 target/linux/generic/config-6.18 target/linux/x86/config-6.18; do
-          if [ -f "$cfg" ]; then
-            grep -q "CONFIG_SND_HDA_CODEC_REALTEK_LIB" "$cfg" || echo "CONFIG_SND_HDA_CODEC_REALTEK_LIB=m" >> "$cfg"
-            echo "  Added to $cfg"
-          fi
-        done
-        echo "  kmod-sound fix done"
-        
-        # Fix 2: shortcut-fe for Linux 6.18+
-        echo "=== Patching shortcut-fe ==="
-        SRC="package/qca/shortcut-fe/shortcut-fe/src"
-        if [ -d "$SRC" ]; then
-          for f in "$SRC/sfe_ipv4.c" "$SRC/sfe_ipv6.c"; do
-            [ -f "$f" ] || continue
-            grep -q "<linux/timer.h>" "$f" || sed -i "/#include <linux\\/version.h>/i #include <linux/timer.h>" "$f"
-            sed -i "s/from_timer(si, tl, timer)/container_of(tl, typeof(*si), timer)/g" "$f"
-            sed -i "s/del_timer_sync(\&si->timer)/timer_delete_sync(\\\\&si->timer)/g" "$f"
-            echo "  Patched $f"
-          done
-          sed -i "s/-Werror/-Wno-deprecated-declarations/g" "$SRC/Makefile"
-          grep -q "DSFE_SUPPORT_IPV6" "$SRC/Makefile" || sed -i "/^ccflags-y/s/$/ -DSFE_SUPPORT_IPV6/" "$SRC/Makefile"
-          rm -rf build_dir/target-*/linux-*/shortcut-fe 2>/dev/null || true
-          sed -i "s/tn->tcp_no_window_check)/0) \\/* tcp_no_window_check removed in Linux 6.18+ *\\//" "$SRC/sfe_cm.c"
-          echo "  Patched sfe_cm.c"
-        fi
-        echo "  All build fixes applied"
+        echo "=== Cleaning stale build artifacts ==="
+        rm -rf build_dir/target-*/linux-*/shortcut-fe 2>/dev/null || true
+        echo "  Build fixes done (package patches applied in diy-part2.sh)"
     - name: Compile the firmware
       id: compile
       env:

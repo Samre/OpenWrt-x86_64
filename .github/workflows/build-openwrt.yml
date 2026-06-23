@@ -148,6 +148,11 @@ jobs:
         cd openwrt
         echo "=== Cleaning stale build artifacts ==="
         rm -rf build_dir/target-*/linux-*/shortcut-fe 2>/dev/null || true
+        
+        echo "=== Clearing Go module cache (fixes internal package errors) ==="
+        rm -rf dl/go-mod-cache 2>/dev/null || true
+        echo "  Go module cache cleared"
+        
         echo "  Build fixes done (package patches applied in diy-part2.sh)"
     - name: Compile the firmware
       id: compile

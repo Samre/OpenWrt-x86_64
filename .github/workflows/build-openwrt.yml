@@ -156,11 +156,11 @@ jobs:
       run: |
         set -euo pipefail
         cd openwrt
-        echo \"=== Cleaning stale build artifacts ===\"
+        echo "=== Cleaning stale build artifacts ==="
         rm -rf build_dir/target-*/linux-*/shortcut-fe 2>/dev/null || true
-        echo \"=== Clearing Go module cache (fixes internal package errors) ===\"
+        echo "=== Clearing Go module cache (fixes internal package errors) ==="
         rm -rf dl/go-mod-cache 2>/dev/null || true
-        echo \"  Build fixes done\"
+        echo "  Build fixes done"
 
     - name: Compile the firmware
       id: compile

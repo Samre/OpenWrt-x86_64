@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REPO_URL: https://github.com/coolsnowwolf/lede
+  REPO_URL: https://github.com/Samre/lede
   REPO_BRANCH: master
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
@@ -34,13 +34,6 @@ env:
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
-  GOPROXY: https://proxy.golang.org,direct
-  GOSUMDB: sum.golang.org
-  GO111MODULE: on
-  GOFLAGS: -buildvcs=false -mod=mod
-  GONOSUMDB: "*"
-  GONOSUMCHECK: "*"
-  GOINSECURE: "*"
 
 jobs:
   build:
@@ -69,13 +62,10 @@ jobs:
         sudo timedatectl set-timezone "$TZ"
 
     - name: Clone source code
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
         df -hT $PWD
-        git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-        for i in 1 2 3; do git clone $REPO_URL -b $REPO_BRANCH openwrt && break || sleep 30; done
+        git clone $REPO_URL -b $REPO_BRANCH openwrt
 
     - name: Restore ccache
       id: ccache-restore
@@ -96,13 +86,9 @@ jobs:
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
     - name: Update feeds
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
-        cd openwrt
-        git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
-        for i in 1 2 3; do ./scripts/feeds update -a && break || sleep 30; done
+        cd openwrt && ./scripts/feeds update -a
 
     - name: Install feeds
       run: |
@@ -141,36 +127,42 @@ jobs:
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
-
-    - name: Fix build issues
+    - name: Fix shortcut-fe for Linux 6.18+
       run: |
         set -euo pipefail
         cd openwrt
-        echo "=== Cleaning stale build artifacts ==="
-        rm -rf build_dir/target-*/linux-*/shortcut-fe 2>/dev/null || true
-        
-        echo "=== Clearing Go module cache (fixes internal package errors) ==="
-        rm -rf dl/go-mod-cache 2>/dev/null || true
-        echo "  Go module cache cleared"
-        
-        echo "  Build fixes done (package patches applied in diy-part2.sh)"
+        SRC="package/qca/shortcut-fe/shortcut-fe/src"
+        if [ -d "$SRC" ]; then
+          echo "=== Patching shortcut-fe ==="
+          for f in "$SRC/sfe_ipv4.c" "$SRC/sfe_ipv6.c"; do
+            [ -f "$f" ] || continue
+            grep -q '<linux/timer.h>' "$f" || sed -i '/#include <linux\/version.h>/i #include <linux/timer.h>' "$f"
+            sed -i 's/from_timer(si, tl, timer)/container_of(tl, typeof(*si), timer)/g' "$f"
+            sed -i 's/del_timer_sync(&si->timer)/timer_delete_sync(\&si->timer)/g' "$f"
+            echo "  Patched $f"
+          done
+          sed -i 's/-Werror/-Wno-deprecated-declarations/g' "$SRC/Makefile"
+          # Add -DSFE_SUPPORT_IPV6 so sfe_cm.h uses extern declarations not inline stubs
+          grep -q 'DSFE_SUPPORT_IPV6' "$SRC/Makefile" || sed -i '/^ccflags-y/s/$/ -DSFE_SUPPORT_IPV6/' "$SRC/Makefile"
+          rm -rf build_dir/target-*/linux-*/shortcut-fe 2>/dev/null || true
+          # Fix sfe_cm.c: tcp_no_window_check removed from struct nf_tcp_net in Linux 6.18+
+          sed -i 's/tn->tcp_no_window_check)/0) \/* tcp_no_window_check removed in Linux 6.18+ *\//' "$SRC/sfe_cm.c"
+          echo "  Patched sfe_cm.c"
+          echo "  Done - build cache cleared"
+        fi
+
     - name: Compile the firmware
       id: compile
-      env:
-        GO111MODULE: on
-        GOFLAGS: -buildvcs=false -mod=mod
-        GONOSUMDB: "*"
-        GONOSUMCHECK: "*"
-        GOINSECURE: "*"
       run: |
         set -euo pipefail
         cd openwrt
         echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 || make -j1 V=s
         echo "status=success" >> $GITHUB_OUTPUT
-        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\\1/' > DEVICE_NAME
+        grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
     - name: Show ccache statistics
       if: always()
       run: |

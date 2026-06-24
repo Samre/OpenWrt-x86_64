@@ -33,7 +33,7 @@ echo "# CONFIG_PACKAGE_mihomo is not set" >> .config
 echo "# CONFIG_PACKAGE_nikki is not set" >> .config
 echo "# CONFIG_PACKAGE_luci-app-fchomo is not set" >> .config
 echo "# CONFIG_PACKAGE_luci-app-nikki is not set" >> .config
-rm -rf feeds/small/mihomo feeds/small/luci-app-fchomo feeds/small/luci-app-nikki feeds/packages/net/nikki 2>/dev/null || true
+rm -rf feeds/small/mihomo feeds/small/luci-app-fchomo feeds/small/luci-app-nikki feeds/packages/net/nikki feeds/packages/sound/owntone 2>/dev/null || true
 echo "  Removed mihomo/nikki/fchomo package dirs"
 
 

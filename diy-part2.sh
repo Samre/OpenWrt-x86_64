@@ -24,25 +24,7 @@ sed -i 's/^CONFIG_PACKAGE_haproxy=y/# CONFIG_PACKAGE_haproxy is not set/' .confi
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall2_INCLUDE_Haproxy is not set/' .config
 sed -i 's/^CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy=y/# CONFIG_PACKAGE_luci-app-passwall_INCLUDE_Haproxy is not set/' .config
 
-
-#5. Remove packages causing build failures (mihomo/nikki/fchomo)
-#    These are auto-selected by proxy packages, Kconfig "select" overrides user disable.
-#    The only reliable way is to remove the package directories entirely.
-#    Also fixes recursive dependency: luci-app-fchomo -> nikki -> firewall4 (circular)
-echo "# CONFIG_PACKAGE_mihomo is not set" >> .config
-echo "# CONFIG_PACKAGE_nikki is not set" >> .config
-echo "# CONFIG_PACKAGE_luci-app-fchomo is not set" >> .config
-echo "# CONFIG_PACKAGE_luci-app-nikki is not set" >> .config
-rm -rf feeds/small/mihomo feeds/small/luci-app-fchomo feeds/small/luci-app-nikki feeds/packages/net/nikki feeds/packages/sound/owntone 2>/dev/null || true
-echo "  Removed mihomo/nikki/fchomo package dirs"
-
-
-#6. Disable kmod-sound-hda-codec-realtek (snd-hda-codec-realtek-lib.ko missing in Linux 6.18+)
-echo "# CONFIG_PACKAGE_owntone is not set" >> .config
-echo "# CONFIG_PACKAGE_libowntone is not set" >> .config
-echo "# CONFIG_PACKAGE_kmod-sound-hda-codec-realtek is not set" >> .config
-
-#7. Fix shortcut-fe kernel module for Linux 6.18+
+#5. Fix shortcut-fe kernel module for Linux 6.18+
 #    Linux 6.13+ REMOVED from_timer() and del_timer_sync() entirely.
 #    Replace with container_of() and inline timer_delete_sync().
 #    Also add missing <linux/timer.h> and remove -Werror.
@@ -67,18 +49,6 @@ if [ -d "$SHORTCUT_FE_SRC" ]; then
     echo "  Replaced del_timer_sync() -> timer_delete_sync() in $f"
   done
 
-
-  # Patch sfe_cm.c: tcp_no_window_check removed in Linux 6.18+
-  if [ -f "$SHORTCUT_FE_SRC/sfe_cm.c" ]; then
-    sed -i 's/tn->tcp_no_window_check)/0) \/* tcp_no_window_check removed in Linux 6.18+ *\//' "$SHORTCUT_FE_SRC/sfe_cm.c"
-    echo "  Patched sfe_cm.c for Linux 6.18+"
-  fi
-
-  # Add DSFE_SUPPORT_IPV6 to ccflags if not present
-  if ! grep -q "DSFE_SUPPORT_IPV6" "$SHORTCUT_FE_SRC/Makefile"; then
-    sed -i '/^ccflags-y/s/$/ -DSFE_SUPPORT_IPV6/' "$SHORTCUT_FE_SRC/Makefile"
-    echo "  Added DSFE_SUPPORT_IPV6 to Makefile"
-  fi
   # Remove -Werror to avoid deprecation warnings becoming errors
   sed -i 's/-Werror/-Wno-deprecated-declarations/g' "$SHORTCUT_FE_SRC/Makefile"
   echo "  Replaced -Werror with -Wno-deprecated-declarations in src/Makefile"

@@ -38,6 +38,8 @@ echo "  Removed mihomo/nikki/fchomo package dirs"
 
 
 #6. Disable kmod-sound-hda-codec-realtek (snd-hda-codec-realtek-lib.ko missing in Linux 6.18+)
+echo "# CONFIG_PACKAGE_owntone is not set" >> .config
+echo "# CONFIG_PACKAGE_libowntone is not set" >> .config
 echo "# CONFIG_PACKAGE_kmod-sound-hda-codec-realtek is not set" >> .config
 
 #7. Fix shortcut-fe kernel module for Linux 6.18+

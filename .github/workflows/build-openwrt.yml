@@ -24,7 +24,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  REPO_URL: https://github.com/coolsnowwolf/lede
+  REPO_URL: https://github.com/Samre/lede
   REPO_BRANCH: master
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
@@ -37,6 +37,8 @@ env:
 
 jobs:
   build:
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 480
 
@@ -65,7 +67,7 @@ jobs:
       run: |
         set -euo pipefail
         df -hT $PWD
-        GIT_TERMINAL_PROMPT=0 git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
+        git config --global url."https://x-access-token:${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/" && GIT_TERMINAL_PROMPT=0 git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
 
     - name: Restore ccache
       id: ccache-restore

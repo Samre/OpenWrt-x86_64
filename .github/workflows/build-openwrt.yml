@@ -65,6 +65,8 @@ jobs:
 
     - name: Clone source code
       run: |
+      env:
+        GH_TOKEN: ${{ secrets.GH_TOKEN }}
         set -euo pipefail
         df -hT $PWD
         git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/" && GIT_TERMINAL_PROMPT=0 git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
@@ -223,7 +225,7 @@ jobs:
       uses: softprops/action-gh-release@v2
       if: steps.tag.outputs.status == 'success' && !cancelled()
       env:
-        GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
@@ -241,4 +243,4 @@ jobs:
       with:
         keep_latest: 3
       env:
-        GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

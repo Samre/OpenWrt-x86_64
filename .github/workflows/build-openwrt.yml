@@ -19,10 +19,6 @@ on:
         required: false
         default: 'false'
 
-concurrency:
-  group: openwrt-build-${{ github.ref }}
-  cancel-in-progress: false
-
 env:
   REPO_URL: https://github.com/Samre/lede
   REPO_BRANCH: master

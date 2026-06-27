@@ -19,8 +19,12 @@ on:
         required: false
         default: 'false'
 
+concurrency:
+  group: openwrt-build-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
-  REPO_URL: https://github.com/coolsnowwolf/lede
+  REPO_URL: https://github.com/Samre/lede
   REPO_BRANCH: master
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
@@ -33,6 +37,8 @@ env:
 
 jobs:
   build:
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     timeout-minutes: 480
 
@@ -57,7 +63,7 @@ jobs:
         sudo apt-get -qq clean
         sudo timedatectl set-timezone "$TZ"
 
-     - name: Clone source code
+    - name: Clone source code
       working-directory: /workdir
       run: |
         df -hT $PWD

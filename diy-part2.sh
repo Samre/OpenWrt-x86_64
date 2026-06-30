@@ -30,5 +30,7 @@ if [ -d "$SHORTCUT_SRC" ]; then
   sed -i 's/del_timer_sync(\&si->timer)/timer_delete_sync(\&si->timer)/g' "$SHORTCUT_SRC/sfe_ipv6.c"
   # Fix: tcp_no_window_check removed from nf_tcp_net in kernel 6.18
   sed -i 's/#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)/#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) \&\& LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)/' "$SHORTCUT_SRC/sfe_cm.c"
+  # Fix: nf_ct_tcp_no_window_check also removed in 6.18, replace with 0
+  sed -i 's/nf_ct_tcp_no_window_check/0/' "$SHORTCUT_SRC/sfe_cm.c"
   echo "shortcut-fe patched for Linux 6.18+"
 fi

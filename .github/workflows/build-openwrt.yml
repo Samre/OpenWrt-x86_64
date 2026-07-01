@@ -35,6 +35,7 @@ jobs:
   build:
     permissions:
       contents: write
+      actions: write
     runs-on: ubuntu-latest
     timeout-minutes: 480
 

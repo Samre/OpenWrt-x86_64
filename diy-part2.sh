@@ -22,6 +22,8 @@ if [ -d "$SHORTCUT_SRC" ]; then
   # Fix: SFE_SUPPORT_IPV6 not passed to compiler in kernel 6.18
   # Add define before sfe_cm.h include in sfe_ipv6.c
   sed -i '/^#include "sfe_cm.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_ipv6.c"
+  # Also need SFE_SUPPORT_IPV6 in sfe_cm.c to avoid unused function error
+  sed -i '/^#include "sfe.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_cm.c"
   # Replace from_timer() with container_of()
   sed -i 's/from_timer(si, tl, timer)/container_of(tl, struct sfe_ipv4, timer)/g' "$SHORTCUT_SRC/sfe_ipv4.c"
   sed -i 's/from_timer(si, tl, timer)/container_of(tl, struct sfe_ipv6, timer)/g' "$SHORTCUT_SRC/sfe_ipv6.c"

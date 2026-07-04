@@ -1,0 +1,380 @@
+<%+header%>
+<style>
+:root {
+  --bg: #0b132b; --card-bg: #131b38; --border: #1d2755;
+  --text: #c8cddc; --text-dim: #5c6280; --text-bright: #e8ecf8;
+  --blue: #5794f2; --green: #2ebd59; --orange: #ff9830; --red: #f2495c;
+  --purple: #b47cf7; --cyan: #33c7d1;
+  --chart-grid: #1d2755;
+}
+* { box-sizing:border-box; margin:0; padding:0 }
+body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif }
+
+/* Top Bar */
+.nd-topbar {
+  display:flex; align-items:center; justify-content:space-between;
+  padding:8px 0; margin-bottom:16px; border-bottom:1px solid var(--border);
+}
+.nd-topbar h2 { font-size:16px; color:var(--text-bright); font-weight:600 }
+.nd-pill {
+  display:inline-flex; align-items:center; gap:6px;
+  padding:3px 10px; border-radius:3px; font-size:10px; font-weight:600;
+  border:1px solid var(--border); background:var(--card-bg);
+}
+.nd-pill.live { color:var(--green); border-color:#1a4d2e }
+.nd-pill.live::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--green); animation:pulse 2s infinite }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.nd-pill.stopped { color:var(--red); border-color:#4d1a1a }
+
+/* Metric Cards */
+.nd-metrics {
+  display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr));
+  gap:8px; margin-bottom:14px;
+}
+.nd-card {
+  background:var(--card-bg); border:1px solid var(--border);
+  border-radius:5px; padding:10px 12px; position:relative; overflow:hidden;
+}
+.nd-card-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:4px }
+.nd-card-title { font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px }
+.nd-card-body { display:flex; align-items:baseline; gap:4px; margin-bottom:6px }
+.nd-card-value { font-size:26px; font-weight:700; color:var(--text-bright); line-height:1 }
+.nd-card-unit { font-size:11px; color:var(--text-dim) }
+.nd-card-sparkline { height:36px }
+.nd-card-sparkline svg { width:100%; height:100% }
+.nd-card-footer { display:flex; justify-content:space-between; font-size:9px; color:var(--text-dim) }
+
+/* Colors */
+.cg{color:var(--green)} .co{color:var(--orange)} .cr{color:var(--red)}
+.cb{color:var(--blue)} .cp{color:var(--purple)} .cc{color:var(--cyan)}
+
+/* Charts */
+.nd-section { margin-bottom:14px }
+.nd-section-title {
+  font-size:12px; color:var(--text-dim); text-transform:uppercase;
+  letter-spacing:1px; padding:6px 0; border-bottom:1px solid var(--border); margin-bottom:8px;
+}
+.nd-chart-group { display:grid; grid-template-columns:1fr 1fr; gap:8px }
+@media(max-width:800px){ .nd-chart-group{grid-template-columns:1fr} }
+.nd-chart-box { background:var(--card-bg); border:1px solid var(--border); border-radius:5px; padding:12px; position:relative }
+.nd-chart-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px }
+.nd-chart-title { font-size:11px; color:var(--text-bright); font-weight:600 }
+.nd-chart-legend { display:flex; gap:10px; font-size:9px; color:var(--text-dim) }
+.nd-chart-legend span { display:flex; align-items:center; gap:3px }
+.nd-chart-legend .dot { width:7px; height:7px; border-radius:2px }
+.nd-chart-body { width:100%; height:180px }
+.nd-chart-body svg { width:100%; height:100% }
+
+/* Tables */
+.nd-table-box { background:var(--card-bg); border:1px solid var(--border); border-radius:5px; overflow:hidden }
+.nd-table { width:100%; border-collapse:collapse; font-size:10px }
+.nd-table th { text-align:left; padding:6px 10px; color:var(--text-dim); font-weight:500; background:#101630; border-bottom:1px solid var(--border) }
+.nd-table td { padding:5px 10px; border-bottom:1px solid #171e3d }
+.nd-table tr:hover td { background:#171e3d }
+.nd-table .val { text-align:right; color:var(--text-bright) }
+
+/* Buttons */
+.nd-actions { display:flex; gap:6px; flex-wrap:wrap; margin-top:10px; margin-bottom:10px }
+.nd-btn {
+  display:inline-flex; align-items:center; gap:3px; padding:5px 12px;
+  border-radius:3px; border:1px solid var(--border); background:var(--card-bg);
+  color:var(--text); font-size:10px; cursor:pointer; text-decoration:none; transition:all .15s;
+}
+.nd-btn:hover { background:#1d2755; border-color:#3a4578; color:var(--text-bright) }
+.nd-btn.accent { background:var(--blue); border-color:var(--blue); color:#fff }
+.nd-btn.accent:hover { background:#4a83e6 }
+.nd-btn.warn { border-color:var(--orange); color:var(--orange) }
+.nd-btn.warn:hover { background:#3a2010; border-color:var(--orange) }
+
+/* Tooltip */
+.nd-tooltip {
+  position:absolute; display:none; background:#1a2240; border:1px solid #3a4578;
+  border-radius:3px; padding:5px 8px; font-size:10px; color:var(--text-bright);
+  pointer-events:none; z-index:10; white-space:nowrap; box-shadow:0 3px 10px rgba(0,0,0,.3);
+}
+</style>
+
+<%
+local function safe_parse(json_str)
+    if not json_str or json_str == "" then return {} end
+    local ok, result = pcall(function()
+        if luci.jsonc then return luci.jsonc.parse(json_str) end
+        if luci.json then return luci.json.parse(json_str) end
+    end)
+    if ok and result then return result end
+    return {}
+end
+
+local json = luci.sys.exec("/usr/bin/ai-monitor.sh --snapshot 2>/dev/null")
+local running = luci.sys.call("pgrep -f 'ai-monitor.sh' >/dev/null") == 0
+local snap = safe_parse(json)
+
+local function mc(val, warn, crit)
+    local v = (tonumber(val) or 0)
+    if v >= (crit or 90) then return "cr" end
+    if v >= (warn or 70) then return "co" end
+    return "cg"
+end
+%>
+
+<div class="nd-topbar">
+    <h2><%=translate('AI Monitor')%></h2>
+    <div style="display:flex;gap:6px;align-items:center">
+        <span style="font-size:10px;color:var(--text-dim)"><%=os.date('%H:%M:%S')%></span>
+        <span class="nd-pill <%=running and 'live' or 'stopped'%>"><%=running and 'LIVE' or 'STOPPED'%></span>
+    </div>
+</div>
+
+<div class="nd-metrics">
+    <div class="nd-card">
+        <div class="nd-card-header"><span class="nd-card-title"><%:CPU%></span><span>💻</span></div>
+        <div class="nd-card-body"><span class="nd-card-value <%=mc(snap.cpu,60,85)%>"><%=snap.cpu or '-'%></span><span class="nd-card-unit">%</span></div>
+        <div class="nd-card-sparkline"><svg id="spark-cpu" viewBox="0 0 200 36" preserveAspectRatio="none"></svg></div>
+        <div class="nd-card-footer"><span>usage</span><span><%:procs%> <%=snap.processes or '-'%></span></div>
+    </div>
+    <div class="nd-card">
+        <div class="nd-card-header"><span class="nd-card-title"><%:Memory%></span><span>🧠</span></div>
+        <div class="nd-card-body"><span class="nd-card-value <%=mc(snap.mem,60,85)%>"><%=snap.mem or '-'%></span><span class="nd-card-unit">%</span></div>
+        <div class="nd-card-sparkline"><svg id="spark-mem" viewBox="0 0 200 36" preserveAspectRatio="none"></svg></div>
+        <div class="nd-card-footer"><span>used</span><span><%:conns%> <%=snap.connections or '-'%></span></div>
+    </div>
+    <div class="nd-card">
+        <div class="nd-card-header"><span class="nd-card-title"><%:Disk%></span><span>💾</span></div>
+        <div class="nd-card-body"><span class="nd-card-value <%=mc(snap.disk,75,92)%>"><%=snap.disk or '-'%></span><span class="nd-card-unit">%</span></div>
+        <div class="nd-card-sparkline"><svg id="spark-disk" viewBox="0 0 200 36" preserveAspectRatio="none"></svg></div>
+        <div class="nd-card-footer"><span>used</span><span>&nbsp;</span></div>
+    </div>
+    <div class="nd-card">
+        <div class="nd-card-header"><span class="nd-card-title"><%:Temperature%></span><span>🌡</span></div>
+        <div class="nd-card-body"><span class="nd-card-value <%=mc(snap.temp,65,80)%>"><%=snap.temp or '-'%></span><span class="nd-card-unit">C</span></div>
+        <div class="nd-card-sparkline"><svg id="spark-temp" viewBox="0 0 200 36" preserveAspectRatio="none"></svg></div>
+        <div class="nd-card-footer"><span>CPU</span><span>&nbsp;</span></div>
+    </div>
+    <div class="nd-card">
+        <div class="nd-card-header"><span class="nd-card-title"><%:Download%></span><span>&darr;</span></div>
+        <div class="nd-card-body"><span class="nd-card-value cb"><%=snap.rx_gb or '0'%></span><span class="nd-card-unit">GB</span></div>
+        <div class="nd-card-sparkline"><svg id="spark-rx" viewBox="0 0 200 36" preserveAspectRatio="none"></svg></div>
+        <div class="nd-card-footer"><span>total</span><span><%:clients%> <%=snap.clients or '0'%></span></div>
+    </div>
+    <div class="nd-card">
+        <div class="nd-card-header"><span class="nd-card-title"><%:Upload%></span><span>&uarr;</span></div>
+        <div class="nd-card-body"><span class="nd-card-value cp"><%=snap.tx_gb or '0'%></span><span class="nd-card-unit">GB</span></div>
+        <div class="nd-card-sparkline"><svg id="spark-tx" viewBox="0 0 200 36" preserveAspectRatio="none"></svg></div>
+        <div class="nd-card-footer"><span>total</span><span>&nbsp;</span></div>
+    </div>
+    <div class="nd-card">
+        <div class="nd-card-header"><span class="nd-card-title"><%:Uptime%></span><span>&#9201;</span></div>
+        <div class="nd-card-body"><span class="nd-card-value cc"><%=snap.uptime_days or '0'%></span><span class="nd-card-unit"><%:days%></span></div>
+        <div class="nd-card-footer"><span><%:since boot%></span><span>&nbsp;</span></div>
+    </div>
+</div>
+
+<div class="nd-actions">
+    <a href="<%=url('admin/services/ai-monitor/dashboard')%>?action=restart" class="nd-btn warn"><%:Restart%></a>
+    <a href="<%=url('admin/services/ai-monitor/dashboard')%>?action=snapshot" class="nd-btn"><%:Refresh%></a>
+    <a href="<%=url('admin/services/ai-monitor/dashboard')%>?action=report" class="nd-btn accent"><%:Report%></a>
+    <a href="<%=url('admin/services/ai-monitor/dashboard')%>?action=optimize" class="nd-btn"><%:Optimize%></a>
+</div>
+
+<div class="nd-section">
+    <div class="nd-section-title"><%:Performance%></div>
+    <div class="nd-chart-group">
+        <div class="nd-chart-box">
+            <div class="nd-chart-header">
+                <span class="nd-chart-title"><%:CPU Usage%></span>
+                <div class="nd-chart-legend"><span><span class="dot" style="background:var(--blue)"></span>%</span></div>
+            </div>
+            <div class="nd-chart-body"><svg id="chart-cpu"></svg></div>
+            <div class="nd-tooltip" id="tt-cpu"></div>
+        </div>
+        <div class="nd-chart-box">
+            <div class="nd-chart-header">
+                <span class="nd-chart-title"><%:Memory Usage%></span>
+                <div class="nd-chart-legend"><span><span class="dot" style="background:var(--green)"></span>%</span></div>
+            </div>
+            <div class="nd-chart-body"><svg id="chart-mem"></svg></div>
+            <div class="nd-tooltip" id="tt-mem"></div>
+        </div>
+        <div class="nd-chart-box">
+            <div class="nd-chart-header">
+                <span class="nd-chart-title"><%:Temperature%></span>
+                <div class="nd-chart-legend"><span><span class="dot" style="background:var(--red)"></span>C</span></div>
+            </div>
+            <div class="nd-chart-body"><svg id="chart-temp"></svg></div>
+            <div class="nd-tooltip" id="tt-temp"></div>
+        </div>
+        <div class="nd-chart-box">
+            <div class="nd-chart-header">
+                <span class="nd-chart-title"><%:Network Traffic%></span>
+                <div class="nd-chart-legend">
+                    <span><span class="dot" style="background:var(--blue)"></span>RX</span>
+                    <span><span class="dot" style="background:var(--purple)"></span>TX</span>
+                </div>
+            </div>
+            <div class="nd-chart-body"><svg id="chart-net"></svg></div>
+            <div class="nd-tooltip" id="tt-net"></div>
+        </div>
+    </div>
+</div>
+
+<div class="nd-section">
+    <div class="nd-section-title"><%:Clients%></div>
+    <div class="nd-table-box">
+        <table class="nd-table">
+        <tr><th>MAC</th><th>IP</th><th><%:Hostname%></th><th class="val"><%:Last Seen%></th></tr>
+        <%
+        local clients = luci.sys.exec("/usr/lib/ai-monitor/reporter.sh clients 2>/dev/null")
+        if clients and #clients > 0 then
+            for line in clients:gmatch("[^\r\n]+") do
+                local mac, ip, host, ts = line:match("([^|]+)|([^|]+)|([^|]*)|([^|]+)")
+                if mac then
+        %>
+        <tr><td><%=mac%></td><td><%=ip or '-'%></td><td><%=host or '-'%></td><td class="val"><%=os.date('%m-%d %H:%M', (tonumber(ts) or 0))%></td></tr>
+        <% end end else %>
+        <tr><td colspan="4" style="color:var(--text-dim);text-align:center;padding:16px"><%:No client data%></td></tr>
+        <% end %>
+        </table>
+    </div>
+</div>
+
+<div class="nd-section">
+    <div class="nd-section-title"><%:Reports%></div>
+    <%
+    local reports = luci.sys.exec("/usr/lib/ai-monitor/reporter.sh list 2>/dev/null")
+    if reports and #reports > 0 then
+        for line in reports:gmatch("[^\r\n]+") do
+            local fname = line:match("([^/]+)%.html$") or line
+    %>
+    <div class="nd-card" style="margin-bottom:3px;padding:6px 10px"><span style="font-size:10px;color:var(--blue)"><%=fname%></span></div>
+    <% end else %>
+    <div style="color:var(--text-dim);font-size:10px;padding:10px"><%:No reports yet%></div>
+    <% end %>
+</div>
+
+<script>
+(function(){
+    var W=600,H=180,P=34;
+    var COLORS={
+        cpu:{l:'#5794f2',f:'rgba(87,148,242,0.12)'},
+        mem:{l:'#2ebd59',f:'rgba(46,189,89,0.12)'},
+        temp:{l:'#f2495c',f:'rgba(242,73,92,0.12)'},
+        disk:{l:'#ff9830',f:'rgba(255,152,48,0.12)'},
+        rx:{l:'#5794f2',f:'rgba(87,148,242,0.10)'},
+        tx:{l:'#b47cf7',f:'rgba(180,124,247,0.10)'}
+    };
+
+    function ts2time(ts){var d=new Date(ts*1000);return ('0'+d.getHours()).slice(-2)+':'+('0'+d.getMinutes()).slice(-2)}
+
+    function spark(sid,pts,c,maxV){
+        var svg=document.getElementById(sid); if(!svg||!pts||pts.length<2)return;
+        maxV=maxV||100; var h=36,w=200,m=2,pw=w-m*2,ph=h-m*2,d='';
+        for(var i=0;i<pts.length;i++){
+            var x=m+(pw*i/(pts.length-1)),y=m+ph-(ph*Math.min(pts[i],maxV)/maxV);
+            d+=(i==0?'M':'L')+x.toFixed(1)+','+y.toFixed(1);
+        }
+        svg.innerHTML=
+            '<path d="'+d+' L'+(m+pw)+','+(m+ph)+' L'+m+','+(m+ph)+' Z" fill="'+c.f+'" shape-rendering="crispEdges"/>'+
+            '<path d="'+d+'" fill="none" stroke="'+c.l+'" stroke-width="1.2" stroke-linejoin="round"/>';
+    }
+
+    function chart(sid,pts,c,maxV,ttid){
+        var svg=document.getElementById(sid);
+        if(!svg||!pts||pts.length<2){if(svg)svg.innerHTML='<text x="300" y="98" text-anchor="middle" fill="#5c6280" font-size="11">--</text>';return;}
+        maxV=maxV||100; var pw=W-P*2,ph=H-P*2;
+        var h='';
+        // grid
+        for(var i=0;i<=4;i++){var y=P+ph*i/4;
+            h+='<line x1="'+P+'" y1="'+y+'" x2="'+(W-P)+'" y2="'+y+'" stroke="var(--chart-grid)" stroke-width="1"/>';
+            h+='<text x="'+(P-6)+'" y="'+(y+4)+'" fill="#5c6280" font-size="9" text-anchor="end">'+Math.round(maxV-maxV*i/4)+'</text>';
+        }
+        // line
+        var d='';
+        for(var i=0;i<pts.length;i++){var x=P+(pw*i/(pts.length-1)),y=P+ph-(ph*Math.min(pts[i].v,maxV)/maxV);
+            d+=(i==0?'M':'L')+x.toFixed(1)+','+y.toFixed(1);
+        }
+        h+='<path d="'+d+' L'+(P+pw)+','+(P+ph)+' L'+P+','+(P+ph)+' Z" fill="'+c.f+'"/>';
+        h+='<path d="'+d+'" fill="none" stroke="'+c.l+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+        // time labels
+        for(var i=0;i<=4;i++){var idx=Math.floor(i*(pts.length-1)/4);if(idx>=pts.length)idx=pts.length-1;
+            h+='<text x="'+(P+pw*i/4)+'" y="'+(H-6)+'" fill="#5c6280" font-size="8" text-anchor="middle">'+ts2time(pts[idx].t)+'</text>';
+        }
+        svg.setAttribute('viewBox','0 0 '+W+' '+H); svg.innerHTML=h;
+
+        // tooltip
+        (function(svg,pts,ttid,maxV,P,pw,ph){
+            var tt=document.getElementById(ttid); if(!tt)return;
+            svg.onmousemove=function(e){
+                var r=svg.getBoundingClientRect(),mx=(e.clientX-r.left)/r.width*W;
+                var idx=Math.round((mx-P)/pw*(pts.length-1)); if(idx<0)idx=0; if(idx>=pts.length)idx=pts.length-1;
+                tt.style.display='block'; tt.style.left=(e.clientX-r.left+10)+'px'; tt.style.top=(e.clientY-r.top-30)+'px';
+                tt.textContent=ts2time(pts[idx].t)+'  '+pts[idx].v.toFixed(1);
+            };
+            svg.onmouseleave=function(){tt.style.display='none'};
+        })(svg,pts,ttid,maxV,P,pw,ph);
+    }
+
+    function dualChart(sid,pts1,pts2,c1,c2){
+        var svg=document.getElementById(sid); if(!svg)return;
+        var all=(pts1||[]).concat(pts2||[]),maxV=1;
+        for(var i=0;i<all.length;i++)if(all[i].v>maxV)maxV=all[i].v; maxV=Math.ceil(maxV*1.1)||1;
+        var pw=W-P*2,ph=H-P*2,h='';
+        for(var i=0;i<=4;i++){var y=P+ph*i/4;
+            h+='<line x1="'+P+'" y1="'+y+'" x2="'+(W-P)+'" y2="'+y+'" stroke="var(--chart-grid)" stroke-width="1"/>';
+            h+='<text x="'+(P-6)+'" y="'+(y+4)+'" fill="#5c6280" font-size="9" text-anchor="end">'+Math.round(maxV-maxV*i/4)+'</text>';
+        }
+        function ln(pts,cl,ds){
+            if(!pts||pts.length<2)return'';
+            var d=''; for(var i=0;i<pts.length;i++){var x=P+(pw*i/(pts.length-1)),y=P+ph-(ph*Math.min(pts[i].v,maxV)/maxV); d+=(i==0?'M':'L')+x.toFixed(1)+','+y.toFixed(1);}
+            return '<path d="'+d+'" fill="none" stroke="'+cl+'" stroke-width="2" stroke-linejoin="round"'+(ds?' stroke-dasharray="4,2"':'')+'/>';
+        }
+        h+=ln(pts1,c1.l,false); h+=ln(pts2,c2.l,true);
+        var maxLen=Math.max((pts1||[]).length,(pts2||[]).length);
+        for(var i=0;i<=4;i++){var idx=Math.floor(i*(maxLen-1)/4); var p=(pts1||pts2)[idx];
+            h+='<text x="'+(P+pw*i/4)+'" y="'+(H-6)+'" fill="#5c6280" font-size="8" text-anchor="middle">'+(p?ts2time(p.t):'')+'</text>';
+        }
+        svg.setAttribute('viewBox','0 0 '+W+' '+H); svg.innerHTML=h;
+    }
+
+    function load(){
+        var xhr=new XMLHttpRequest();
+        xhr.open('GET','<%=url('admin/services/ai-monitor/chart_data')%>?period=hourly',true);
+        xhr.onload=function(){
+            if(xhr.status!=200)return;
+            try{var d=JSON.parse(xhr.responseText)}catch(e){return;}
+            var cd=d; // chart data
+            function ln(arr,n){return arr.slice(Math.max(0,arr.length-n))}
+
+            spark('spark-cpu',ln(cd.cpu||[],30).map(function(p){return p.v}),COLORS.cpu,100);
+            spark('spark-mem',ln(cd.mem||[],30).map(function(p){return p.v}),COLORS.mem,100);
+            spark('spark-temp',ln(cd.temp||[],30).map(function(p){return p.v}),COLORS.temp,100);
+            spark('spark-disk',ln(cd.disk||[],30).map(function(p){return p.v}),COLORS.disk,100);
+
+            var rx=cd.rx||[],tx=cd.tx||[];
+            spark('spark-rx',ln(rx,30).map(function(p){return p.v}),COLORS.rx,Math.max.apply(null,rx.map(function(p){return p.v}).concat([1])));
+            spark('spark-tx',ln(tx,30).map(function(p){return p.v}),COLORS.tx,Math.max.apply(null,tx.map(function(p){return p.v}).concat([1])));
+
+            chart('chart-cpu',cd.cpu||[],COLORS.cpu,100,'tt-cpu');
+            chart('chart-mem',cd.mem||[],COLORS.mem,100,'tt-mem');
+            chart('chart-temp',cd.temp||[],COLORS.temp,100,'tt-temp');
+            dualChart('chart-net',cd.rx||[],cd.tx||[],COLORS.rx,COLORS.tx);
+        };
+        xhr.send();
+    }
+    load(); setInterval(load,30000);
+})();
+</script>
+
+<%
+if luci.http.formvalue("action") == "restart" then
+    luci.sys.call("/etc/init.d/ai-monitor restart >/dev/null 2>&1")
+    luci.http.redirect(luci.dispatcher.build_url("admin/services/ai-monitor/dashboard"))
+end
+if luci.http.formvalue("action") == "report" then
+    luci.sys.call("/usr/bin/ai-monitor.sh --report daily >/dev/null 2>&1 &")
+end
+if luci.http.formvalue("action") == "optimize" then
+    luci.sys.call("/usr/bin/ai-monitor.sh --optimize >/dev/null 2>&1 &")
+end
+%>
+
+<%+footer%>

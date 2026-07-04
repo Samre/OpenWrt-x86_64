@@ -62,9 +62,10 @@ if [ -f "$COLL" ]; then
     !p' "$COLL" > /tmp/ai_collector_fix && mv /tmp/ai_collector_fix "$COLL"
 fi
 
-# Fix LuCI templates: remove BOM + fix CRLF + nil guard
+# Fix LuCI templates: remove BOM (only if present) + fix CRLF + nil guard
 for tmpl in $(find package -path "*/luci-app-ai-monitor/*.htm" -type f 2>/dev/null); do
-  tail -c +4 "$tmpl" 2>/dev/null > /tmp/ai_bom_fix && mv /tmp/ai_bom_fix "$tmpl"
+  # Only strip BOM if present (EF BB BF), never unconditionally
+  sed -i '1s/^﻿//' "$tmpl"
   sed -i 's/\r//g' "$tmpl"
   sed -i 's/tonumber(\(snap\.[a-z_]*\))/(tonumber(\1) or 0)/g' "$tmpl"
 done

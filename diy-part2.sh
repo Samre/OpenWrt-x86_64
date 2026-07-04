@@ -49,9 +49,8 @@ echo "Stripping BOM and CRLF from ai-monitor files..."
 for f in $(find package -path "*/ai-monitor/files/*.sh" \
                      -o -path "*/ai-monitor/files/lib/*.sh" \
                      -o -path "*/ai-monitor/files/*.init" \
-                     -o -path "*/luci-app-ai-monitor/luasrc/*.htm" \
-                     -o -path "*/luci-app-ai-monitor/luasrc/*.lua" \
-                     -o -path "*/luci-app-ai-monitor/root/*.lua" \
+                     -o -path "*/luci-app-ai-monitor/*" -name "*.htm" \
+                     -o -path "*/luci-app-ai-monitor/*" -name "*.lua" \
                      2>/dev/null); do
   # Strip BOM from first line (use cmp for reliable binary comparison)
   if head -c 3 "$f" 2>/dev/null | cmp -s - <(printf '\xef\xbb\xbf') 2>/dev/null; then
@@ -93,7 +92,12 @@ if [ -d "$OVERLAY" ]; then
   # Replace dashboard with Netdata-inspired version
   DASH=$(find package -path "*/luci-app-ai-monitor/luasrc/view/ai-monitor/dashboard.htm" -type f 2>/dev/null | head -1)
   if [ -f "$DASH" ] && [ -f "$OVERLAY/dashboard.htm" ]; then
-    cp "$OVERLAY/dashboard.htm" "$DASH" && echo "ai-monitor: Netdata dashboard injected"
+    cp "$OVERLAY/dashboard.htm" "$DASH" && echo "ai-monitor: dashboard injected"
+  fi
+  # Replace log template (fix nested tag syntax error)
+  LOG=$(find package -path "*/luci-app-ai-monitor/luasrc/view/ai-monitor/log.htm" -type f 2>/dev/null | head -1)
+  if [ -f "$LOG" ] && [ -f "$OVERLAY/log.htm" ]; then
+    cp "$OVERLAY/log.htm" "$LOG" && echo "ai-monitor: log.htm injected"
   fi
   # Replace reporter with enhanced version (disk/rx/tx chart data)
   REP=$(find package -path "*/ai-monitor/files/lib/reporter.sh" -type f 2>/dev/null | head -1)

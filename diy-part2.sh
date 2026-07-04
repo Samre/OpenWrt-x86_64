@@ -44,7 +44,8 @@ echo "Patching ai-monitor for runtime fixes..."
 
 # Step 1: Strip BOM (UTF-8 EF BB BF) and CRLF from ALL ai-monitor text files
 # Covers: .sh, .init, .htm, .lua in package/lean/ai-monitor and luci-app-ai-monitor
-# BOM in .sh causes shebang failure; BOM in .htm causes template parse errors
+# Uses sed to strip BOM from first line — safe even if no BOM present
+echo "Stripping BOM and CRLF from ai-monitor files..."
 for f in $(find package -path "*/ai-monitor/files/*.sh" \
                      -o -path "*/ai-monitor/files/lib/*.sh" \
                      -o -path "*/ai-monitor/files/*.init" \
@@ -52,12 +53,14 @@ for f in $(find package -path "*/ai-monitor/files/*.sh" \
                      -o -path "*/luci-app-ai-monitor/luasrc/*.lua" \
                      -o -path "*/luci-app-ai-monitor/root/*.lua" \
                      2>/dev/null); do
-  # Strip BOM only if present (first 3 bytes = EF BB BF)
-  if [ "$(head -c 3 "$f" 2>/dev/null)" = "$(printf '\xef\xbb\xbf')" ]; then
-    tail -c +4 "$f" > /tmp/ai_fix_tmp && mv /tmp/ai_fix_tmp "$f"
+  # Strip BOM from first line (use cmp for reliable binary comparison)
+  if head -c 3 "$f" 2>/dev/null | cmp -s - <(printf '\xef\xbb\xbf') 2>/dev/null; then
+    tail -c +4 "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"
+    echo "  BOM removed: $(basename "$f")"
   fi
   # Strip CRLF → LF
   sed -i 's/\r//g' "$f" 2>/dev/null
+  echo "  Fixed: $(basename "$f")"
 done
 
 # Step 2: Suppress source loop noise in ai-monitor.sh

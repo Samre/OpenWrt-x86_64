@@ -20,9 +20,7 @@ sed -i 's/$1$V4UetPzk$CYXluq4wUazHjmCDBCqXF.//g' package/lean/default-settings/f
 SHORTCUT_SRC="package/qca/shortcut-fe/shortcut-fe/src"
 if [ -d "$SHORTCUT_SRC" ]; then
   # Fix: SFE_SUPPORT_IPV6 not passed to compiler in kernel 6.18
-  # Add define before sfe_cm.h include in sfe_ipv6.c
   sed -i '/^#include "sfe_cm.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_ipv6.c"
-  # Also need SFE_SUPPORT_IPV6 in sfe_cm.c to avoid unused function error
   sed -i '/^#include "sfe.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_cm.c"
   # Replace from_timer() with container_of()
   sed -i 's/from_timer(si, tl, timer)/container_of(tl, struct sfe_ipv4, timer)/g' "$SHORTCUT_SRC/sfe_ipv4.c"
@@ -37,14 +35,12 @@ if [ -d "$SHORTCUT_SRC" ]; then
   echo "shortcut-fe patched for Linux 6.18+"
 fi
 
-# ─────────────────────────────────────────────────────
+# ============================================================
 # Patch ai-monitor: BOM / CRLF / nil guards / CPU calc
-# ─────────────────────────────────────────────────────
+# ============================================================
 echo "Patching ai-monitor for runtime fixes..."
 
-# Step 1: Strip BOM (UTF-8 EF BB BF) and CRLF from ALL ai-monitor text files
-# Covers: .sh, .init, .htm, .lua in package/lean/ai-monitor and luci-app-ai-monitor
-# Uses sed to strip BOM from first line — safe even if no BOM present
+# Step 1: Strip BOM and CRLF from ALL ai-monitor text files
 echo "Stripping BOM and CRLF from ai-monitor files..."
 for f in $(find package -path "*/ai-monitor/files/*.sh" \
                      -o -path "*/ai-monitor/files/lib/*.sh" \
@@ -52,58 +48,67 @@ for f in $(find package -path "*/ai-monitor/files/*.sh" \
                      -o -path "*/luci-app-ai-monitor/*" -name "*.htm" \
                      -o -path "*/luci-app-ai-monitor/*" -name "*.lua" \
                      2>/dev/null); do
-  # Strip BOM from first line (use cmp for reliable binary comparison)
+  # Strip BOM from first line
   if head -c 3 "$f" 2>/dev/null | cmp -s - <(printf '\xef\xbb\xbf') 2>/dev/null; then
     tail -c +4 "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"
     echo "  BOM removed: $(basename "$f")"
   fi
-  # Strip CRLF → LF
+  # Strip CRLF -> LF
   sed -i 's/\r//g' "$f" 2>/dev/null
   echo "  Fixed: $(basename "$f")"
 done
 
-# Step 2: Suppress source loop noise in ai-monitor.sh
+# Step 2: Suppress source loop noise
 AI_SH=$(find package -path "*/ai-monitor/files/ai-monitor.sh" 2>/dev/null | head -1)
 if [ -f "$AI_SH" ]; then
   sed -i 's|. "$lib"|. "$lib" >/dev/null 2>\&1|' "$AI_SH"
 fi
 
-# Step 3: Fix collector.sh CPU calculation (usr% → 100-idle%)
+# Step 3: Fix collect_cpu - use /proc/stat (no top/nproc dependency)
 COLL=$(find package -path "*/ai-monitor/files/lib/collector.sh" 2>/dev/null | head -1)
 if [ -f "$COLL" ]; then
   awk 'BEGIN{p=0}
     /^collect_cpu\(\)/ {p=1; print "collect_cpu() {"
-      print "local idle=$(top -bn1 2>/dev/null | grep \"^CPU:\" | grep -o \"[0-9]*% idle\" | grep -o \"[0-9]*\")"
-      print "local cpu=$((100 - ${idle:-100}))"
-      print "echo \"${cpu:-0}\" | tr -d \"\\\\n\\\\r\""
+      print "  local cpu=$(awk '\''/^cpu /{total=$2+$3+$4+$5+$6+$7+$8;idle=$5;if(total>0)printf \"%.0f\",(total-idle)*100/total;else print \"0\"}'\'' /proc/stat 2>/dev/null)"
+      print "  [ -z \"$cpu\" ] && cpu=$(awk '\''{printf \"%.0f\",$1*100}'\'' /proc/loadavg 2>/dev/null)"
+      print "  echo \"${cpu:-0}\""
       print "}"; next}
     /^[a-z_]+\(\)/ {if(p){p=0}}
     !p' "$COLL" > /tmp/ai_collector_fix && mv /tmp/ai_collector_fix "$COLL"
+  echo "  collect_cpu patched: /proc/stat + loadavg fallback"
 fi
 
-# Step 4: Fix LuCI template nil guard (tonumber(nil) → 0)
+# Step 4: Fix LuCI template nil guard
 for tmpl in $(find package -path "*/luci-app-ai-monitor/luasrc/view/*.htm" -type f 2>/dev/null); do
   sed -i 's/tonumber(\(snap\.[a-z_]*\))/(tonumber(\1) or 0)/g' "$tmpl"
 done
 
-# Step 5: Inject Netdata-style dashboard and enhanced reporter
+# Step 5: Inject overlay files (dashboard, log, reporter)
 OVERLAY="$GITHUB_WORKSPACE/ai-monitor-overlay"
 if [ -d "$OVERLAY" ]; then
-  # Replace dashboard with Netdata-inspired version
   DASH=$(find package -path "*/luci-app-ai-monitor/luasrc/view/ai-monitor/dashboard.htm" -type f 2>/dev/null | head -1)
   if [ -f "$DASH" ] && [ -f "$OVERLAY/dashboard.htm" ]; then
     cp "$OVERLAY/dashboard.htm" "$DASH" && echo "ai-monitor: dashboard injected"
   fi
-  # Replace log template (fix nested tag syntax error)
   LOG=$(find package -path "*/luci-app-ai-monitor/luasrc/view/ai-monitor/log.htm" -type f 2>/dev/null | head -1)
   if [ -f "$LOG" ] && [ -f "$OVERLAY/log.htm" ]; then
     cp "$OVERLAY/log.htm" "$LOG" && echo "ai-monitor: log.htm injected"
   fi
-  # Replace reporter with enhanced version (disk/rx/tx chart data)
   REP=$(find package -path "*/ai-monitor/files/lib/reporter.sh" -type f 2>/dev/null | head -1)
   if [ -f "$REP" ] && [ -f "$OVERLAY/reporter.sh" ]; then
     cp "$OVERLAY/reporter.sh" "$REP" && echo "ai-monitor: enhanced reporter injected"
   fi
 fi
+
+# Step 6: Post-injection CRLF cleanup (belt-and-suspenders for overlay files)
+echo "Post-injection CRLF cleanup..."
+for f in $(find package -path "*/ai-monitor/files/*.sh" \
+                     -o -path "*/ai-monitor/files/lib/*.sh" \
+                     -o -path "*/ai-monitor/files/*.init" \
+                     -o -path "*/luci-app-ai-monitor/*" -name "*.htm" \
+                     -o -path "*/luci-app-ai-monitor/*" -name "*.lua" \
+                     2>/dev/null); do
+  sed -i 's/\r//g' "$f" 2>/dev/null
+done
 
 echo "ai-monitor patches applied"

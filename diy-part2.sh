@@ -63,7 +63,7 @@ done
 # curl/coreutils/coreutils-stat/sqlite3-cli not in feeds → build fails
 AI_MK=$(find package -path "*/ai-monitor/Makefile" -type f 2>/dev/null | head -1)
 if [ -f "$AI_MK" ]; then
-  sed -i "s/DEPENDS:=+curl +coreutils +coreutils-stat +sqlite3-cli/DEPENDS:=/" "$AI_MK"
+  sed -i "s/^[[:space:]]*DEPENDS:=.*/  DEPENDS:=/" "$AI_MK"
   echo "  ai-monitor Makefile: hard deps removed"
 fi
 

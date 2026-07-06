@@ -58,11 +58,6 @@ for f in $(find package -path "*/ai-monitor/files/*.sh" \
   echo "  Fixed: $(basename "$f")"
 done
 
-# Step 2: Suppress source loop noise
-AI_SH=$(find package -path "*/ai-monitor/files/ai-monitor.sh" 2>/dev/null | head -1)
-if [ -f "$AI_SH" ]; then
-  sed -i 's|. "$lib"|. "$lib" >/dev/null 2>\&1|' "$AI_SH"
-fi
 
 # Step 3: Fix collect_cpu - use /proc/stat (no top/nproc dependency)
 COLL=$(find package -path "*/ai-monitor/files/lib/collector.sh" 2>/dev/null | head -1)

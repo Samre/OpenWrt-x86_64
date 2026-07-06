@@ -59,6 +59,14 @@ for f in $(find package -path "*/ai-monitor/files/*.sh" \
 done
 
 
+# Step 2.5: Fix ai-monitor Makefile — remove missing hard dependencies
+# curl/coreutils/coreutils-stat/sqlite3-cli not in feeds → build fails
+AI_MK=$(find package -path "*/ai-monitor/Makefile" -type f 2>/dev/null | head -1)
+if [ -f "$AI_MK" ]; then
+  sed -i "s/DEPENDS:=+curl +coreutils +coreutils-stat +sqlite3-cli/DEPENDS:=/" "$AI_MK"
+  echo "  ai-monitor Makefile: hard deps removed"
+fi
+
 # Step 3: Fix collect_cpu - use /proc/stat (no top/nproc dependency)
 COLL=$(find package -path "*/ai-monitor/files/lib/collector.sh" 2>/dev/null | head -1)
 if [ -f "$COLL" ]; then
@@ -73,7 +81,7 @@ if [ -f "$COLL" ]; then
   echo "  collect_cpu patched: /proc/stat + loadavg fallback"
 fi
 
-# Step 4: Fix LuCI template nil guard
+# Step 5: Fix LuCI template nil guard
 for tmpl in $(find package -path "*/luci-app-ai-monitor/luasrc/view/*.htm" -type f 2>/dev/null); do
   sed -i 's/tonumber(\(snap\.[a-z_]*\))/(tonumber(\1) or 0)/g' "$tmpl"
 done
@@ -95,7 +103,7 @@ if [ -d "$OVERLAY" ]; then
   fi
 fi
 
-# Step 6: Post-injection CRLF cleanup (belt-and-suspenders for overlay files)
+# Step 7: Post-injection CRLF cleanup (belt-and-suspenders for overlay files)
 echo "Post-injection CRLF cleanup..."
 for f in $(find package -path "*/ai-monitor/files/*.sh" \
                      -o -path "*/ai-monitor/files/lib/*.sh" \

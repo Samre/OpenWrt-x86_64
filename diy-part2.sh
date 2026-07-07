@@ -55,13 +55,8 @@ done
 AI_MK=$(find package -path "*/ai-monitor/Makefile" -type f 2>/dev/null | head -1)
 if [ -f "$AI_MK" ]; then
   sed -i 's/^[[:space:]]*DEPENDS:=.*/  DEPENDS:=/' "$AI_MK"
-  # Add INSTALL step for sqlite3 binary if we build it
-  if grep -q "sqlite3" "$AI_MK" 2>/dev/null; then :; else
-    sed -i '/define Package\/ai-monitor\/install/a\	$(INSTALL_BIN) ./files/sqlite3 $(1)/usr/bin/ 2>/dev/null || true' "$AI_MK"
-  fi
   echo "  ai-monitor Makefile: hard deps removed"
 fi
-
 # Step 2.6: Build standalone sqlite3 binary (bypass feed version conflict)
 SQLITE_BIN="package/lean/ai-monitor/files/sqlite3"
 if [ ! -f "$SQLITE_BIN" ]; then
@@ -80,6 +75,9 @@ if [ ! -f "$SQLITE_BIN" ]; then
     mkdir -p "$(dirname "$SQLITE_BIN")"
     cp /tmp/sqlite3 "$SQLITE_BIN"
     chmod +x "$SQLITE_BIN"
+    # Also copy to files/ overlay for firmware inclusion
+    mkdir -p files/usr/bin
+    cp "$SQLITE_BIN" files/usr/bin/sqlite3 && echo "  sqlite3 copied to files/ overlay"
     echo "  sqlite3 built OK ($(du -h /tmp/sqlite3 | cut -f1))"
   else
     echo "  WARNING: sqlite3 compile failed, DB features unavailable"

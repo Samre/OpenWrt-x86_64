@@ -19,24 +19,19 @@ sed -i 's/$1$V4UetPzk$CYXluq4wUazHjmCDBCqXF.//g' package/lean/default-settings/f
 # Patch shortcut-fe for Linux 6.18+ compatibility
 SHORTCUT_SRC="package/qca/shortcut-fe/shortcut-fe/src"
 if [ -d "$SHORTCUT_SRC" ]; then
-  # Fix: SFE_SUPPORT_IPV6 not passed to compiler in kernel 6.18
   sed -i '/^#include "sfe_cm.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_ipv6.c"
   sed -i '/^#include "sfe.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_cm.c"
-  # Replace from_timer() with container_of()
   sed -i 's/from_timer(si, tl, timer)/container_of(tl, struct sfe_ipv4, timer)/g' "$SHORTCUT_SRC/sfe_ipv4.c"
   sed -i 's/from_timer(si, tl, timer)/container_of(tl, struct sfe_ipv6, timer)/g' "$SHORTCUT_SRC/sfe_ipv6.c"
-  # Replace del_timer_sync() with timer_delete_sync()
   sed -i 's/del_timer_sync(\&si->timer)/timer_delete_sync(\&si->timer)/g' "$SHORTCUT_SRC/sfe_ipv4.c"
   sed -i 's/del_timer_sync(\&si->timer)/timer_delete_sync(\&si->timer)/g' "$SHORTCUT_SRC/sfe_ipv6.c"
-  # Fix: tcp_no_window_check removed from nf_tcp_net in kernel 6.18
   sed -i 's/#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)/#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0) \&\& LINUX_VERSION_CODE < KERNEL_VERSION(6, 18, 0)/' "$SHORTCUT_SRC/sfe_cm.c"
-  # Fix: nf_ct_tcp_no_window_check also removed in 6.18, replace with 0
   sed -i 's/nf_ct_tcp_no_window_check/0/' "$SHORTCUT_SRC/sfe_cm.c"
   echo "shortcut-fe patched for Linux 6.18+"
 fi
 
 # ============================================================
-# Patch ai-monitor: BOM / CRLF / nil guards / CPU calc
+# Patch ai-monitor: BOM / CRLF / nil guards / CPU calc / sqlite3
 # ============================================================
 echo "Patching ai-monitor for runtime fixes..."
 
@@ -48,23 +43,47 @@ for f in $(find package -path "*/ai-monitor/files/*.sh" \
                      -o -path "*/luci-app-ai-monitor/*" -name "*.htm" \
                      -o -path "*/luci-app-ai-monitor/*" -name "*.lua" \
                      2>/dev/null); do
-  # Strip BOM from first line
   if head -c 3 "$f" 2>/dev/null | cmp -s - <(printf '\xef\xbb\xbf') 2>/dev/null; then
     tail -c +4 "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"
     echo "  BOM removed: $(basename "$f")"
   fi
-  # Strip CRLF -> LF
   sed -i 's/\r//g' "$f" 2>/dev/null
   echo "  Fixed: $(basename "$f")"
 done
 
-
 # Step 2.5: Fix ai-monitor Makefile — remove missing hard dependencies
-# curl/coreutils/coreutils-stat/sqlite3-cli not in feeds → build fails
 AI_MK=$(find package -path "*/ai-monitor/Makefile" -type f 2>/dev/null | head -1)
 if [ -f "$AI_MK" ]; then
-  sed -i "s/^[[:space:]]*DEPENDS:=.*/  DEPENDS:=/" "$AI_MK"
+  sed -i 's/^[[:space:]]*DEPENDS:=.*/  DEPENDS:=/' "$AI_MK"
+  # Add INSTALL step for sqlite3 binary if we build it
+  if grep -q "sqlite3" "$AI_MK" 2>/dev/null; then :; else
+    sed -i '/define Package\/ai-monitor\/install/a\	$(INSTALL_BIN) ./files/sqlite3 $(1)/usr/bin/ 2>/dev/null || true' "$AI_MK"
+  fi
   echo "  ai-monitor Makefile: hard deps removed"
+fi
+
+# Step 2.6: Build standalone sqlite3 binary (bypass feed version conflict)
+SQLITE_BIN="package/lean/ai-monitor/files/sqlite3"
+if [ ! -f "$SQLITE_BIN" ]; then
+  echo "Building standalone sqlite3 (static, no feed dependency)..."
+  SQLITE_VER="3450300"
+  curl -sL "https://www.sqlite.org/2024/sqlite-amalgamation-${SQLITE_VER}.zip" -o /tmp/sqlite.zip
+  unzip -oq /tmp/sqlite.zip -d /tmp/sqlite-src
+  SRC=$(echo /tmp/sqlite-src/sqlite-amalgamation-*)
+  gcc -static -s -O2 -DNDEBUG \
+    -DSQLITE_THREADSAFE=0 \
+    -DSQLITE_OMIT_LOAD_EXTENSION \
+    -DSQLITE_OMIT_DEPRECATED \
+    "$SRC/shell.c" "$SRC/sqlite3.c" \
+    -o /tmp/sqlite3 -lpthread -ldl -lm 2>/dev/null
+  if [ -f /tmp/sqlite3 ]; then
+    mkdir -p "$(dirname "$SQLITE_BIN")"
+    cp /tmp/sqlite3 "$SQLITE_BIN"
+    chmod +x "$SQLITE_BIN"
+    echo "  sqlite3 built OK ($(du -h /tmp/sqlite3 | cut -f1))"
+  else
+    echo "  WARNING: sqlite3 compile failed, DB features unavailable"
+  fi
 fi
 
 # Step 3: Fix collect_cpu - use /proc/stat (no top/nproc dependency)
@@ -81,7 +100,7 @@ if [ -f "$COLL" ]; then
   echo "  collect_cpu patched: /proc/stat + loadavg fallback"
 fi
 
-# Step 5: Fix LuCI template nil guard
+# Step 4: Fix LuCI template nil guard
 for tmpl in $(find package -path "*/luci-app-ai-monitor/luasrc/view/*.htm" -type f 2>/dev/null); do
   sed -i 's/tonumber(\(snap\.[a-z_]*\))/(tonumber(\1) or 0)/g' "$tmpl"
 done
@@ -103,7 +122,7 @@ if [ -d "$OVERLAY" ]; then
   fi
 fi
 
-# Step 7: Post-injection CRLF cleanup (belt-and-suspenders for overlay files)
+# Step 6: Post-injection CRLF cleanup
 echo "Post-injection CRLF cleanup..."
 for f in $(find package -path "*/ai-monitor/files/*.sh" \
                      -o -path "*/ai-monitor/files/lib/*.sh" \

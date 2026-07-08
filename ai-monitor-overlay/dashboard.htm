@@ -65,12 +65,10 @@ local function sh(cmd)
     return r:match("^%s*(.-)%s*$") or ""
 end
 
--- CPU: try top, fallback to /proc/loadavg
-local cpu_str = sh("top -bn1 | grep 'CPU:' | awk '{print $2}' | sed 's/%%//'")
+-- CPU: use /proc/stat (no top/nproc dependency)
+local cpu_str = sh("awk '/^cpu /{total=$2+$3+$4+$5+$6+$7+$8;idle=$5;if(total>0)printf "%.0f",(total-idle)*100/total;else print "0"}' /proc/stat")
 if cpu_str == "" then
-    local nproc = tonumber(sh("nproc")) or 1
-    local load1 = sh("awk '{print $1}' /proc/loadavg")
-    cpu_str = tostring(math.floor((tonumber(load1) or 0) * 100 / nproc))
+    cpu_str = "0"
 end
 local cpu = tonumber(cpu_str) or 0
 

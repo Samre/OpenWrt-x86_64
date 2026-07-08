@@ -127,7 +127,6 @@ HTMLEOF
 
 generate_chart_json() {
     local since=$1
-    # Helper: read query_range output into JSON array
     _build_array() {
         local first=1
         while IFS='|' read -r ts val; do
@@ -138,21 +137,16 @@ generate_chart_json() {
         done
     }
 
-    # CPU
     local cpu_json=$(query_range $since cpu | _build_array)
-    # Memory
     local mem_json=$(query_range $since mem | _build_array)
-    # Temperature
     local temp_json=$(query_range $since temp | _build_array)
-    # Disk
     local disk_json=$(query_range $since disk | _build_array)
-    # Network - convert bytes to MB for chart readability
     local rx_json="" tx_json="" first=1
     while IFS='|' read -r ts rx tx; do
         [ -z "$ts" ] && continue
         [ $first -eq 0 ] && { rx_json="$rx_json,"; tx_json="$tx_json,"; }
-        local rx_mb=$(awk "BEGIN{printf \"%.1f\",${rx:-0}/1048576}")
-        local tx_mb=$(awk "BEGIN{printf \"%.1f\",${tx:-0}/1048576}")
+        rx_mb=$(awk "BEGIN{printf \"%.1f\",${rx:-0}/1048576}")
+        tx_mb=$(awk "BEGIN{printf \"%.1f\",${tx:-0}/1048576}")
         rx_json="$rx_json{\"t\":$ts,\"v\":$rx_mb}"
         tx_json="$tx_json{\"t\":$ts,\"v\":$tx_mb}"
         first=0
@@ -170,7 +164,7 @@ push_report() {
     [ -z "$PUSH_TOKEN" ] && return
     case "$PUSH_TYPE" in
         serverchan)
-            curl -s --connect-timeout 5 -m 10 "https://sctapi.ftqq.com/${PUSH_TOKEN}.send?title=AI%20Monitor%20Report&desp=$(echo "$msg"|python3 -c "import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.read()))" 2>/dev/null||echo "$msg")" >/dev/null 2>&1 ;;
+            curl -s --connect-timeout 5 -m 10 "https://sctapi.ftqq.com/${PUSH_TOKEN}.send?title=AI%20Monitor%20Report&desp=$(echo "$msg"|sed 's/ /%20/g;s/\n/%0A/g')" >/dev/null 2>&1 ;;
         telegram)
             curl -s --connect-timeout 5 -m 10 "https://api.telegram.org/bot${PUSH_TOKEN}/sendMessage" -d "chat_id=$TELEGRAM_CHAT_ID" -d "text=$(echo "$msg"|head -10)" -d "parse_mode=HTML" >/dev/null 2>&1 ;;
     esac
@@ -185,7 +179,7 @@ ai_summary() {
     local al=$(get_alerts $since|wc -l)
     local hrs=$(((now-since)/3600))
     local prompt="OpenWrt ${hrs}h report: CPU avg ${ac}%, Memory avg ${am}%, ${al} alerts. Give a brief summary and advice (under 50 words)."
-    curl -s --connect-timeout 10 -m 30 -H "Content-Type: application/json" -H "Authorization: Bearer ***" -d "{\"model\":\"$AI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"max_tokens\":150,\"temperature\":0.3}" "$AI_API_URL" 2>/dev/null | grep -o '"content":"[^"]*"'|head -1|sed 's/"content":"//;s/"$//'
+    curl -s --connect-timeout 10 -m 30 -H "Content-Type: application/json" -H "Authorization: Bearer ${AI_API_KEY}" -d "{\"model\":\"$AI_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"$prompt\"}],\"max_tokens\":150,\"temperature\":0.3}" "$AI_API_URL" 2>/dev/null | grep -o '"content":"[^"]*"'|head -1|sed 's/"content":"//;s/"$//'
 }
 
 generate_report() {

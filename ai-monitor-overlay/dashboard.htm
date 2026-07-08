@@ -86,48 +86,13 @@ local function sh(cmd)
     return r:match("^%s*(.-)%s*$") or ""
 end
 
-local function read_cpu_totals(path)
-    local f = io.open(path, "r")
-    if not f then return nil end
-    local line = f:read("*l") or ""
-    f:close()
-    local vals = {}
-    for n in line:gmatch("%d+") do vals[#vals + 1] = tonumber(n) or 0 end
-    if #vals < 4 then return nil end
-    local total = 0
-    for _, v in ipairs(vals) do total = total + v end
-    return total, vals[4] or 0
+-- CPU: use /proc/stat via shell (no io.open dependency)
+local cpu_str = sh("awk '/^cpu /{total=$2+$3+$4+$5+$6+$7+$8;idle=$5;if(total>0)printf "%.0f",(total-idle)*100/total;else print "0"}' /proc/stat")
+if cpu_str == "" then
+    cpu_str = "0"
 end
+local cpu = tonumber(cpu_str) or 0
 
-local function collect_cpu()
-    local total, idle = read_cpu_totals("/proc/stat")
-    if not total or total <= 0 then return 0 end
-
-    local prev_total, prev_idle
-    local pf = io.open("/tmp/ai-monitor-dashboard.cpu", "r")
-    if pf then
-        local line = pf:read("*l") or ""
-        pf:close()
-        prev_total, prev_idle = line:match("^(%d+)%s+(%d+)$")
-        prev_total, prev_idle = tonumber(prev_total), tonumber(prev_idle)
-    end
-
-    local wf = io.open("/tmp/ai-monitor-dashboard.cpu", "w")
-    if wf then
-        wf:write(string.format("%d %d\n", total, idle))
-        wf:close()
-    end
-
-    if prev_total and prev_idle and total > prev_total then
-        local dt = total - prev_total
-        local di = idle - prev_idle
-        return math.floor(((dt - di) * 100 / dt) + 0.5)
-    end
-
-    return math.floor(((total - idle) * 100 / total) + 0.5)
-end
-
-local cpu = collect_cpu()
 
 -- Memory
 local mem_str = sh("free | awk '/Mem:/ {printf \"%.1f\", $3/$2*100}'")
@@ -146,23 +111,8 @@ local iface = sh("ip route | awk '/default/{print $5;exit}'")
 if iface == "" then iface = "eth0" end
 if not iface:match("^[%w%._:-]+$") then iface = "eth0" end
 
-local function read_net_bytes(dev)
-    local f = io.open("/proc/net/dev", "r")
-    if not f then return 0, 0 end
-    for line in f:lines() do
-        local name, data = line:match("^%s*([^:]+):%s*(.+)$")
-        if name and name:gsub("%s+", "") == dev then
-            local fields = {}
-            for n in data:gmatch("%d+") do fields[#fields + 1] = tonumber(n) or 0 end
-            f:close()
-            return fields[1] or 0, fields[9] or 0
-        end
-    end
-    f:close()
-    return 0, 0
-end
-
-local rx_bytes, tx_bytes = read_net_bytes(iface)
+local rx_bytes = tonumber(sh("awk -v i='"..iface..":' '$1==i{print $2}' /proc/net/dev")) or 0
+local tx_bytes = tonumber(sh("awk -v i='"..iface..":' '$1==i{print $10}' /proc/net/dev")) or 0
 local rx_gb = string.format("%.1f", rx_bytes / 1073741824)
 local tx_gb = string.format("%.1f", tx_bytes / 1073741824)
 

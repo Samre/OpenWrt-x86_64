@@ -10,6 +10,18 @@
 # Description: OpenWrt DIY script part 2 (After Update feeds)
 #
 
+REPO_ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
+
+find_ai_monitor_text_files() {
+  find package \( \
+    -path "*/ai-monitor/files/*.sh" \
+    -o -path "*/ai-monitor/files/lib/*.sh" \
+    -o -path "*/ai-monitor/files/*.init" \
+    -o \( -path "*/luci-app-ai-monitor/*" -name "*.htm" \) \
+    -o \( -path "*/luci-app-ai-monitor/*" -name "*.lua" \) \
+  \) -type f 2>/dev/null
+}
+
 # Modify default IP
 sed -i 's/192.168.1.1/192.168.216.10/g' package/base-files/files/bin/config_generate
 
@@ -19,8 +31,18 @@ sed -i 's/$1$V4UetPzk$CYXluq4wUazHjmCDBCqXF.//g' package/lean/default-settings/f
 # Patch shortcut-fe for Linux 6.18+ compatibility
 SHORTCUT_SRC="package/qca/shortcut-fe/shortcut-fe/src"
 if [ -d "$SHORTCUT_SRC" ]; then
-  sed -i '/^#include "sfe_cm.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_ipv6.c"
-  sed -i '/^#include "sfe.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_cm.c"
+  if ! grep -q "SFE_SUPPORT_IPV6 1" "$SHORTCUT_SRC/sfe_ipv6.c"; then
+    sed -i '/^#include "sfe_cm.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_ipv6.c"
+  fi
+  if ! grep -q "SFE_SUPPORT_IPV6 1" "$SHORTCUT_SRC/sfe_cm.c"; then
+    sed -i '/^#include "sfe.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_cm.c"
+  fi
+  if ! grep -q "timer_delete_sync(t)" "$SHORTCUT_SRC/sfe_ipv4.c"; then
+    sed -i '/^#include "sfe_cm.h"/i #include <linux/version.h>\n#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 15, 0)\n#define timer_delete_sync(t) del_timer_sync(t)\n#endif' "$SHORTCUT_SRC/sfe_ipv4.c"
+  fi
+  if ! grep -q "timer_delete_sync(t)" "$SHORTCUT_SRC/sfe_ipv6.c"; then
+    sed -i '/^#include "sfe_cm.h"/i #include <linux/version.h>\n#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 15, 0)\n#define timer_delete_sync(t) del_timer_sync(t)\n#endif' "$SHORTCUT_SRC/sfe_ipv6.c"
+  fi
   sed -i 's/from_timer(si, tl, timer)/container_of(tl, struct sfe_ipv4, timer)/g' "$SHORTCUT_SRC/sfe_ipv4.c"
   sed -i 's/from_timer(si, tl, timer)/container_of(tl, struct sfe_ipv6, timer)/g' "$SHORTCUT_SRC/sfe_ipv6.c"
   sed -i 's/del_timer_sync(\&si->timer)/timer_delete_sync(\&si->timer)/g' "$SHORTCUT_SRC/sfe_ipv4.c"
@@ -37,12 +59,7 @@ echo "Patching ai-monitor for runtime fixes..."
 
 # Step 1: Strip BOM and CRLF from ALL ai-monitor text files
 echo "Stripping BOM and CRLF from ai-monitor files..."
-for f in $(find package -path "*/ai-monitor/files/*.sh" \
-                     -o -path "*/ai-monitor/files/lib/*.sh" \
-                     -o -path "*/ai-monitor/files/*.init" \
-                     -o -path "*/luci-app-ai-monitor/*" -name "*.htm" \
-                     -o -path "*/luci-app-ai-monitor/*" -name "*.lua" \
-                     2>/dev/null); do
+find_ai_monitor_text_files | while IFS= read -r f; do
   if head -c 3 "$f" 2>/dev/null | cmp -s - <(printf '\xef\xbb\xbf') 2>/dev/null; then
     tail -c +4 "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"
     echo "  BOM removed: $(basename "$f")"
@@ -104,7 +121,7 @@ for tmpl in $(find package -path "*/luci-app-ai-monitor/luasrc/view/*.htm" -type
 done
 
 # Step 5: Inject overlay files (dashboard, log, reporter)
-OVERLAY="$GITHUB_WORKSPACE/ai-monitor-overlay"
+OVERLAY="$REPO_ROOT/ai-monitor-overlay"
 if [ -d "$OVERLAY" ]; then
   DASH=$(find package -path "*/luci-app-ai-monitor/luasrc/view/ai-monitor/dashboard.htm" -type f 2>/dev/null | head -1)
   if [ -f "$DASH" ] && [ -f "$OVERLAY/dashboard.htm" ]; then
@@ -122,12 +139,7 @@ fi
 
 # Step 6: Post-injection CRLF cleanup
 echo "Post-injection CRLF cleanup..."
-for f in $(find package -path "*/ai-monitor/files/*.sh" \
-                     -o -path "*/ai-monitor/files/lib/*.sh" \
-                     -o -path "*/ai-monitor/files/*.init" \
-                     -o -path "*/luci-app-ai-monitor/*" -name "*.htm" \
-                     -o -path "*/luci-app-ai-monitor/*" -name "*.lua" \
-                     2>/dev/null); do
+find_ai_monitor_text_files | while IFS= read -r f; do
   sed -i 's/\r//g' "$f" 2>/dev/null
 done
 

@@ -11,8 +11,6 @@ elseif action == "optimize" then
 end
 %>
 <%+header%>
-%>
-<%+header%>
 <style>
 :root {
   --bg:#0b132b; --card-bg:#131b38; --border:#1d2755;
@@ -93,7 +91,7 @@ local mem_str = sh("free | awk '/Mem:/ {printf \"%.1f\", $3/$2*100}'")
 local mem = tonumber(mem_str) or 0
 
 -- Disk
-local disk_str = sh("df / | awk 'NR==2 {print $5}' | sed 's/%%//'")
+local disk_str = sh("df / | awk 'NR==2 {print $5}' | sed 's/%//'")
 local disk = tonumber(disk_str) or 0
 
 -- Temperature

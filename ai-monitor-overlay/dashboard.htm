@@ -1,22 +1,16 @@
 <%
-local http = require "luci.http"
-local dispatcher = require "luci.dispatcher"
-local sys = require "luci.sys"
-
-local action = http.formvalue("action")
-if action and action ~= "" then
-    if http.getenv("REQUEST_METHOD") == "POST" and http.formvalue("token") == dispatcher.context.authtoken then
-        if action == "restart" then
-            sys.call("/etc/init.d/ai-monitor restart >/dev/null 2>&1")
-        elseif action == "report" then
-            sys.call("/usr/bin/ai-monitor.sh --report daily >/dev/null 2>&1 &")
-        elseif action == "optimize" then
-            sys.call("/usr/bin/ai-monitor.sh --optimize >/dev/null 2>&1 &")
-        end
-    end
-    http.redirect(dispatcher.build_url("admin/services/ai-monitor/dashboard"))
+local action = luci.http.formvalue("action")
+if action == "restart" then
+    luci.sys.call("/etc/init.d/ai-monitor restart >/dev/null 2>&1")
+    luci.http.redirect(luci.dispatcher.build_url("admin/services/ai-monitor/dashboard"))
     return
+elseif action == "report" then
+    luci.sys.call("/usr/bin/ai-monitor.sh --report daily >/dev/null 2>&1 &")
+elseif action == "optimize" then
+    luci.sys.call("/usr/bin/ai-monitor.sh --optimize >/dev/null 2>&1 &")
 end
+%>
+<%+header%>
 %>
 <%+header%>
 <style>
@@ -203,22 +197,11 @@ local snap_json = string.format(
 </div>
 
 <div class="nd-actions">
-    <form method="post" action="<%=url('admin/services/ai-monitor/dashboard')%>">
-        <input type="hidden" name="token" value="<%=dispatcher.context.authtoken%>">
-        <input type="hidden" name="action" value="restart">
-        <button type="submit" class="nd-btn warn"><%:Restart Service%></button>
-    </form>
+    <a href="<%=url('admin/services/ai-monitor/dashboard')%>?action=restart" class="nd-btn warn"><%:Restart Service%></a>
     <a href="<%=url('admin/services/ai-monitor/dashboard')%>" class="nd-btn accent"><%:Refresh%></a>
-    <form method="post" action="<%=url('admin/services/ai-monitor/dashboard')%>">
-        <input type="hidden" name="token" value="<%=dispatcher.context.authtoken%>">
-        <input type="hidden" name="action" value="report">
-        <button type="submit" class="nd-btn"><%:Generate Report%></button>
-    </form>
-    <form method="post" action="<%=url('admin/services/ai-monitor/dashboard')%>">
-        <input type="hidden" name="token" value="<%=dispatcher.context.authtoken%>">
-        <input type="hidden" name="action" value="optimize">
-        <button type="submit" class="nd-btn"><%:Optimize%></button>
-    </form>
+    <a href="<%=url('admin/services/ai-monitor/dashboard')%>?action=report" class="nd-btn"><%:Generate Report%></a>
+    <a href="<%=url('admin/services/ai-monitor/dashboard')%>?action=optimize" class="nd-btn"><%:Optimize%></a>
+</div>
 </div>
 
 <div class="nd-section">

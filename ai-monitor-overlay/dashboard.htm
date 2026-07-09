@@ -87,7 +87,7 @@ local function sh(cmd)
 end
 
 -- CPU: use /proc/stat via shell (no io.open dependency)
-local cpu_str = sh("awk '/^cpu /{total=$2+$3+$4+$5+$6+$7+$8;idle=$5;if(total>0)printf "%.0f",(total-idle)*100/total;else print "0"}' /proc/stat")
+local cpu_str = sh("awk '/^cpu /{total=$2+$3+$4+$5+$6+$7+$8;idle=$5;if(total>0)printf \"%.0f\",(total-idle)*100/total;else print \"0\"}' /proc/stat")
 if cpu_str == "" then
     cpu_str = "0"
 end

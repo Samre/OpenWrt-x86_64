@@ -30,7 +30,3 @@ if [ -d "$SHORTCUT_SRC" ]; then
   echo "shortcut-fe patched for Linux 6.18+"
 fi
 
-# Enable netdata auto-start on boot
-mkdir -p files/etc/rc.d
-ln -sf ../init.d/netdata files/etc/rc.d/S99netdata 2>/dev/null
-echo "netdata auto-start enabled"

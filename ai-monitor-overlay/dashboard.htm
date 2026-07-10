@@ -102,15 +102,26 @@ local disk = tonumber((disk_raw:gsub("%%", ""))) or 0
 local temp_str = sh("for f in /sys/class/thermal/thermal_zone*/temp; do [ -r \"$f\" ] && awk '{printf \"%.0f\", $1/1000}' \"$f\" && exit 0; done; echo 0")
 local temp = tonumber(temp_str) or 0
 
--- Network
-local iface = sh("ip route | awk '/default/{print $5;exit}'")
-if iface == "" then iface = "eth0" end
-if not iface:match("^[%w%._:-]+$") then iface = "eth0" end
+-- Network: auto-detect interface with fallback
+local iface = sh("ip route show default | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1);exit}}'")
+if iface == "" then
+    iface = sh("awk -F: 'NR>2 && $2>0 && $1!~/lo/{gsub(/ /,"",$1);print $1;exit}' /proc/net/dev")
+end
+if iface == "" or not iface:match("^[%w%._:-]+$") then iface = "eth0" end
 
 local rx_bytes = tonumber(sh("awk -v i='"..iface..":' '$1==i{print $2}' /proc/net/dev")) or 0
 local tx_bytes = tonumber(sh("awk -v i='"..iface..":' '$1==i{print $10}' /proc/net/dev")) or 0
+if rx_bytes == 0 and tx_bytes == 0 then
+    rx_bytes = tonumber(sh("awk -F'[: ]+' 'NR>2 && $2!~/lo/{s+=$3}END{print s+0}' /proc/net/dev")) or 0
+    tx_bytes = tonumber(sh("awk -F'[: ]+' 'NR>2 && $2!~/lo/{s+=$11}END{print s+0}' /proc/net/dev")) or 0
+end
 local rx_gb = string.format("%.1f", rx_bytes / 1073741824)
 local tx_gb = string.format("%.1f", tx_bytes / 1073741824)
+
+-- Uptime: ensure minimum display
+local uptime_str = sh("cat /proc/uptime | awk '{print int($1/86400)}'")
+local uptime_days = tonumber(uptime_str)
+if not uptime_days or uptime_days < 0 then uptime_days = 0 end
 
 -- Clients
 local clients_str = sh("wc -l < /tmp/dhcp.leases 2>/dev/null || ip neigh | grep -c REACHABLE")
@@ -125,8 +136,6 @@ local conns_str = sh("cat /proc/net/nf_conntrack 2>/dev/null | wc -l || echo 0")
 local connections = tonumber(conns_str) or 0
 
 -- Uptime
-local uptime_str = sh("awk '{printf \"%.0f\", $1/86400}' /proc/uptime")
-local uptime_days = tonumber(uptime_str) or 0
 
 -- Running check
 local running = luci.sys.call("pgrep -f 'ai-monitor.sh' >/dev/null") == 0

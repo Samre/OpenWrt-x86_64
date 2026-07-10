@@ -142,5 +142,9 @@ echo "Post-injection CRLF cleanup..."
 find_ai_monitor_text_files | while IFS= read -r f; do
   sed -i 's/\r//g' "$f" 2>/dev/null
 done
+# Enable netdata auto-start on boot
+mkdir -p files/etc/rc.d
+ln -sf ../init.d/netdata files/etc/rc.d/S99netdata 2>/dev/null
+echo "netdata auto-start enabled"
 
 echo "ai-monitor patches applied"

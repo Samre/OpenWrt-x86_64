@@ -135,6 +135,14 @@ if [ -d "$OVERLAY" ]; then
   if [ -f "$REP" ] && [ -f "$OVERLAY/reporter.sh" ]; then
     cp "$OVERLAY/reporter.sh" "$REP" && echo "ai-monitor: enhanced reporter injected"
   fi
+  # Inject AI Butler script
+  BUTLER=$(find package -path "*/ai-monitor/files/lib/ai-butler.sh" -type f 2>/dev/null | head -1)
+  if [ -f "$BUTLER" ] && [ -f "$OVERLAY/ai-butler.sh" ]; then
+    cp "$OVERLAY/ai-butler.sh" "$BUTLER" && echo "ai-monitor: AI butler injected"
+  fi
+  # Schedule health monitor cron (every 5 min)
+  mkdir -p files/etc/crontabs
+  echo "*/5 * * * * /usr/lib/ai-monitor/ai-butler.sh monitor" >> files/etc/crontabs/root
 fi
 
 # Step 6: Post-injection CRLF cleanup

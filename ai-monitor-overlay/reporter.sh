@@ -312,12 +312,15 @@ get_report_content() {
 get_chart_data() {
     local period="${1:-daily}" now=$(date +%s) since
     case "$period" in
+        5min)   since=$((now-300)) ;;
+        30min)  since=$((now-1800)) ;;
         hourly) since=$((now-3600)) ;;
         daily)  since=$((now-86400)) ;;
         weekly) since=$((now-604800)) ;;
         *)      since=$((now-86400)) ;;
     esac
     generate_chart_json $since
+}
 }
 get_client_list() {
     local now since

@@ -68,6 +68,10 @@ body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSy
 .nd-btn.warn{border-color:var(--orange);color:var(--orange)}
 .nd-btn.warn:hover{background:#3a2010}
 
+.nd-range-bar{display:flex;gap:4px;margin-bottom:8px}
+.nd-range-btn{background:var(--card-bg);border:1px solid var(--border);color:var(--dim);padding:3px 10px;border-radius:3px;font-size:10px;cursor:pointer;transition:all .15s}
+.nd-range-btn:hover{background:#1d2755;color:var(--bright)}
+.nd-range-btn.active{background:var(--blue);border-color:var(--blue);color:#fff}
 .nd-err{background:#1a1220;border:1px solid #f2495c;border-radius:5px;padding:10px 14px;margin-bottom:12px;font-size:10px}
 </style>
 
@@ -198,6 +202,12 @@ end
 
 <div class="nd-section">
     <div class="nd-sec-title"><%:Performance Charts%></div>
+    <div class="nd-range-bar">
+        <button class="nd-range-btn active" data-period="5min">5m</button>
+        <button class="nd-range-btn" data-period="30min">30m</button>
+        <button class="nd-range-btn" data-period="hourly">1h</button>
+        <button class="nd-range-btn" data-period="daily">24h</button>
+    </div>
     <div class="nd-charts">
         <div class="nd-chart-box">
             <div class="nd-chart-hd"><span class="nd-chart-title"><%:CPU Usage%></span><div class="nd-chart-legend"><span><i style="background:var(--blue)"></i>%</span></div></div>
@@ -274,29 +284,39 @@ function dualChart(id,pts1,pts2,c1,c2){
     for(var i=0;i<all.length;i++){if(all[i].v>maxV)maxV=all[i].v} maxV=Math.ceil(maxV*1.1)||1;
     var pw=W-P*2,ph=H-P*2,o='';
     for(var i=0;i<=4;i++){var y=P+ph*i/4;
-        o+='<line x1="'+P+'" y1="'+y+'" x2="'+(W-P)+'" y2="'+y+'" stroke="#1d2755" stroke-width="1"/>';
-        o+='<text x="'+(P-6)+'" y="'+(y+4)+'" fill="#5c6280" font-size="9" text-anchor="end">'+Math.round(maxV-maxV*i/4)+'</text>'}
-    function ln(a,c,ds){if(!a||a.length<2)return'';var d='';for(var i=0;i<a.length;i++){var x=P+pw*i/(a.length-1),y=P+ph-ph*Math.min(a[i].v,maxV)/maxV;d+=(i?'L':'M')+x.toFixed(1)+','+y.toFixed(1)}return'<path d="'+d+'" fill="none" stroke="'+c+'" stroke-width="2" stroke-linejoin="round"'+(ds?' stroke-dasharray="4,2"':'')+'/>'}
-    o+=ln(pts1,c1.l,false); o+=ln(pts2,c2.l,true);
-    var maxL=Math.max((pts1||[]).length,(pts2||[]).length);
-    var base=(pts1&&pts1.length?pts1:pts2)||[];
-    for(var i=0;i<=4;i++){var idx=Math.floor(i*(maxL-1)/4),p=base[idx]||{};o+='<text x="'+(P+pw*i/4)+'" y="'+(H-5)+'" fill="#5c6280" font-size="8" text-anchor="middle">'+fmtTime(p.t||0)+'</text>'}
-    s.setAttribute('viewBox','0 0 '+W+' '+H); s.innerHTML=o;
-}
-
-function loadCharts(){
+function loadCharts(p){
+    p=p||"5min";
     var x=new XMLHttpRequest();
-    x.open('GET','<%=url('admin/services/ai-monitor/chart_data')%>?period=hourly',true);
+    x.open("GET","<%=url('admin/services/ai-monitor/chart_data')%>?period="+p,true);
     x.onload=function(){
         if(x.status!=200)return;
         try{var d=JSON.parse(x.responseText)}catch(e){return}
-        var C={cpu:{l:'#5794f2',f:'rgba(87,148,242,0.12)'},mem:{l:'#2ebd59',f:'rgba(46,189,89,0.12)'},temp:{l:'#f2495c',f:'rgba(242,73,92,0.12)'},disk:{l:'#ff9830',f:'rgba(255,152,48,0.12)'},rx:{l:'#5794f2',f:'rgba(87,148,242,0.10)'},tx:{l:'#b47cf7',f:'rgba(180,124,247,0.10)'}};
+        var C={cpu:{l:"#5794f2",f:"rgba(87,148,242,0.12)"},mem:{l:"#2ebd59",f:"rgba(46,189,89,0.12)"},temp:{l:"#f2495c",f:"rgba(242,73,92,0.12)"},disk:{l:"#ff9830",f:"rgba(255,152,48,0.12)"},rx:{l:"#5794f2",f:"rgba(87,148,242,0.10)"},tx:{l:"#b47cf7",f:"rgba(180,124,247,0.10)"}};
         function ln(a,n){return a?a.slice(Math.max(0,a.length-n)):[]}
         function vs(a){return ln(a,30).map(function(p){return p.v})}
-        spark('sp-cpu',vs(d.cpu),C.cpu,100);
-        spark('sp-mem',vs(d.mem),C.mem,100);
-        spark('sp-temp',vs(d.temp),C.temp,100);
-        spark('sp-disk',vs(d.disk),C.disk,100);
+        spark("sp-cpu",vs(d.cpu),C.cpu,100);
+        spark("sp-mem",vs(d.mem),C.mem,100);
+        spark("sp-temp",vs(d.temp),C.temp,100);
+        spark("sp-disk",vs(d.disk),C.disk,100);
+        var rxv=vs(d.rx||[]),txv=vs(d.tx||[]),rMax=Math.max.apply(null,rxv.concat([1])),tMax=Math.max.apply(null,txv.concat([1]));
+        spark("sp-rx",rxv,C.rx,rMax); spark("sp-tx",txv,C.tx,tMax);
+        chart("ch-cpu",d.cpu||[],C.cpu,100);
+        chart("ch-mem",d.mem||[],C.mem,100);
+        chart("ch-temp",d.temp||[],C.temp,100);
+        dualChart("ch-net",d.rx||[],d.tx||[],C.rx,C.tx);
+    };
+    x.send();
+}
+var curPeriod="5min";
+loadCharts(curPeriod); setInterval(function(){loadCharts(curPeriod)},30000);
+document.querySelectorAll(".nd-range-btn").forEach(function(b){
+    b.onclick=function(){
+        document.querySelectorAll(".nd-range-btn").forEach(function(x){x.classList.remove("active")});
+        this.classList.add("active");
+        curPeriod=this.dataset.period;
+        loadCharts(curPeriod);
+    }
+});
         var rxv=vs(d.rx||[]),txv=vs(d.tx||[]),rMax=Math.max.apply(null,rxv.concat([1])),tMax=Math.max.apply(null,txv.concat([1]));
         spark('sp-rx',rxv,C.rx,rMax); spark('sp-tx',txv,C.tx,tMax);
         chart('ch-cpu',d.cpu||[],C.cpu,100);

@@ -91,11 +91,11 @@ local mem_str = sh("free | awk '/Mem:/ {printf \"%.1f\", $3/$2*100}'")
 local mem = tonumber(mem_str) or 0
 
 -- Disk
-local disk_str = sh("df / | awk 'NR==2 {print $5}' | sed 's/%//'")
-local disk = tonumber(disk_str) or 0
+local disk_raw = sh("df -P / | awk 'NR==2 {print $5}'")
+local disk = tonumber((disk_raw:gsub("%%", ""))) or 0
 
 -- Temperature
-local temp_str = sh("for f in /sys/class/thermal/thermal_zone*/temp; do [ -f \"$f\" ] && awk '{printf \"%.0f\", $1/1000}' \"$f\" && break; done")
+local temp_str = sh("for f in /sys/class/thermal/thermal_zone*/temp; do [ -r \"$f\" ] && awk '{printf \"%.0f\", $1/1000}' \"$f\" && exit 0; done; echo 0")
 local temp = tonumber(temp_str) or 0
 
 -- Network
@@ -135,11 +135,6 @@ local function mc(v,w,c)
     return "cg"
 end
 
--- Build JSON snapshot (for JS charts fallback)
-local snap_json = string.format(
-    '{"cpu":%d,"mem":%.1f,"disk":%d,"temp":%d,"rx_gb":%s,"tx_gb":%s,"clients":%d,"processes":%d,"connections":%d,"uptime_days":%d}',
-    cpu, mem, disk, temp, rx_gb, tx_gb, clients, processes, connections, uptime_days
-)
 %>
 
 <div class="nd-topbar">
@@ -199,7 +194,6 @@ local snap_json = string.format(
     <a href="<%=url('admin/services/ai-monitor/dashboard')%>" class="nd-btn accent"><%:Refresh%></a>
     <a href="<%=url('admin/services/ai-monitor/dashboard')%>?action=report" class="nd-btn"><%:Generate Report%></a>
     <a href="<%=url('admin/services/ai-monitor/dashboard')%>?action=optimize" class="nd-btn"><%:Optimize%></a>
-</div>
 </div>
 
 <div class="nd-section">

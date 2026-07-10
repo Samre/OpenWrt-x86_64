@@ -321,7 +321,6 @@ get_chart_data() {
     esac
     generate_chart_json $since
 }
-}
 get_client_list() {
     local now since
     now=$(date +%s)

@@ -1,15 +1,11 @@
 #!/bin/sh
-# Report Generator - daily/weekly reports with charts and scheduled push
+# Report Generator - powered by Netdata API (no sqlite3 needed)
+# Queries local Netdata instance for all metrics
 
 DATA_DIR="/var/lib/ai-monitor"
-DB="$DATA_DIR/metrics.db"
 REPORT_DIR="/tmp/ai-monitor-reports"
+ND_URL="http://localhost:19999"
 
-if [ -r /usr/lib/ai-monitor/collector.sh ]; then
-    . /usr/lib/ai-monitor/collector.sh
-elif [ -r /usr/bin/ai-monitor-lib-collector.sh ]; then
-    . /usr/bin/ai-monitor-lib-collector.sh
-fi
 [ -f /etc/ai-monitor.conf ] && . /etc/ai-monitor.conf
 
 PUSH_TYPE="${PUSH_TYPE:-none}"
@@ -20,232 +16,131 @@ AI_API_URL="${AI_API_URL:-https://api.deepseek.com/chat/completions}"
 AI_MODEL="${AI_MODEL:-deepseek-chat}"
 REPORT_TO_PUSH="${REPORT_TO_PUSH:-1}"
 
-is_uint() {
-    case "${1:-}" in
-        ''|*[!0-9]*) return 1 ;;
-        *) return 0 ;;
-    esac
+# ── Netdata API helpers ──
+
+# Fetch data from Netdata chart API
+# Usage: nd_fetch <chart> <after_seconds>
+nd_fetch() {
+    local chart="$1" after="$2"
+    curl -s "${ND_URL}/api/v1/data?chart=${chart}&after=-${after}&points=0&format=json" 2>/dev/null
 }
 
-safe_since() {
-    is_uint "${1:-}" && printf '%s' "$1" || date +%s
+# Get average from Netdata data array
+# Usage: echo "$json" | nd_avg
+nd_avg() {
+    python3 -c "import sys,json; d=json.load(sys.stdin); vals=[p[1] for p in d.get('data',[[]])[0] if p[1] is not None]; print(round(sum(vals)/len(vals),1))" 2>/dev/null || \
+    awk 'BEGIN{RS=",";sum=0;n=0}/"data":\[\[/{getline; while($0!~/\]\]/){gsub(/[^0-9.]/,"");if($0!=""){sum+=$0;n++}getline}}END{if(n>0)printf "%.1f",sum/n;else print "0"}'
 }
 
-have_db() {
-    [ -r "$DB" ] && command -v sqlite3 >/dev/null 2>&1
+# Get max from Netdata data array
+nd_max() {
+    python3 -c "import sys,json; d=json.load(sys.stdin); vals=[p[1] for p in d.get('data',[[]])[0] if p[1] is not None]; print(round(max(vals),1) if vals else 0)" 2>/dev/null || \
+    awk 'BEGIN{RS=",";max=0}/"data":\[\[/{getline; while($0!~/\]\]/){gsub(/[^0-9.]/,"");if($0!=""){v=$0+0;if(v>max)max=v}getline}}END{print max}'
 }
 
-html_escape() {
-    sed 's/&/\&amp;/g;s/</\&lt;/g;s/>/\&gt;/g;s/"/\&quot;/g;s/'"'"'/\&#39;/g'
+# Get latest single value
+nd_last() {
+    python3 -c "import sys,json; d=json.load(sys.stdin); vals=[p[1] for p in d.get('data',[[]])[0] if p[1] is not None]; print(vals[-1] if vals else 0)" 2>/dev/null || \
+    awk 'BEGIN{RS=",";last=0}/"data":\[\[/{getline; while($0!~/\]\]/){gsub(/[^0-9.]/,"");if($0!="")last=$0;getline}}END{print last}'
 }
 
-json_string() {
-    awk 'BEGIN {
-        printf "\""
-    }
-    {
-        gsub(/\\/,"\\\\")
-        gsub(/"/,"\\\"")
-        gsub(/\t/,"\\t")
-        gsub(/\r/,"\\r")
-        gsub(/\n/,"\\n")
-        printf "%s", $0
-    }
-    END {
-        printf "\""
-    }'
+# Get count of data points
+nd_count() {
+    python3 -c "import sys,json; d=json.load(sys.stdin); vals=[p[1] for p in d.get('data',[[]])[0] if p[1] is not None]; print(len(vals))" 2>/dev/null || echo 0
 }
 
-json_number() {
-    awk -v n="${1:-0}" 'BEGIN {
-        if (n ~ /^-?[0-9]+([.][0-9]+)?$/) printf "%s", n
-        else printf "0"
-    }'
-}
-
-bar_width() {
-    awk -v v="${1:-0}" 'BEGIN {
-        if (v < 0) v = 0
-        if (v > 100) v = 100
-        printf "%.1f", v
-    }'
-}
+# ── Metric fetchers ──
 
 query_range() {
-    local since metric
-    since=$(safe_since "$1")
-    metric=$2
-    have_db || return 0
+    local since=$1 metric=$2 period=$(( $(date +%s) - since ))
     case "$metric" in
-        cpu)    sqlite3 "$DB" "SELECT ts,cpu FROM metrics WHERE ts >= $since ORDER BY ts;" 2>/dev/null ;;
-        mem)    sqlite3 "$DB" "SELECT ts,mem FROM metrics WHERE ts >= $since ORDER BY ts;" 2>/dev/null ;;
-        disk)   sqlite3 "$DB" "SELECT ts,disk FROM metrics WHERE ts >= $since ORDER BY ts;" 2>/dev/null ;;
-        temp)   sqlite3 "$DB" "SELECT ts,temp FROM metrics WHERE ts >= $since ORDER BY ts;" 2>/dev/null ;;
-        traffic) sqlite3 "$DB" "SELECT ts,rx_bytes,tx_bytes FROM metrics WHERE ts >= $since ORDER BY ts;" 2>/dev/null ;;
-        clients) sqlite3 "$DB" "SELECT ts,clients FROM metrics WHERE ts >= $since ORDER BY ts;" 2>/dev/null ;;
-        load)   sqlite3 "$DB" "SELECT ts,load1,load5,load15 FROM metrics WHERE ts >= $since ORDER BY ts;" 2>/dev/null ;;
-        conns)  sqlite3 "$DB" "SELECT ts,conns FROM metrics WHERE ts >= $since ORDER BY ts;" 2>/dev/null ;;
+        cpu)    nd_fetch "system.cpu" "$period" ;;
+        mem)    nd_fetch "system.ram" "$period" ;;
+        disk)   nd_fetch "disk_space._" "$period" ;;
+        temp)   nd_fetch "sensors.temperature_*" "$period" ;;
+        traffic) nd_fetch "net.*" "$period" ;;
+        clients) nd_fetch "netdata.server_connections" "$period" ;;
+        conns)  nd_fetch "ipv4.sockstat_sockets" "$period" ;;
+        load)   nd_fetch "system.load" "$period" ;;
     esac
 }
 
 query_stats() {
-    local since
-    since=$(safe_since "$1")
-    have_db || {
-        printf '0|0|0|0|0|0|0|0|0|0|0|0|0\n'
-        return
-    }
-    sqlite3 "$DB" "SELECT ROUND(AVG(cpu),1),MAX(cpu),ROUND(AVG(mem),1),MAX(mem),ROUND(AVG(disk),1),MAX(disk),ROUND(AVG(temp),1),MAX(temp),ROUND(AVG(clients),1),MAX(clients),MAX(processes),MAX(conns),COUNT(*) FROM metrics WHERE ts >= $since;" 2>/dev/null
-}
-
-get_peak_traffic() {
-    local since
-    since=$(safe_since "$1")
-    have_db || return 0
-    sqlite3 "$DB" "SELECT ROUND(MAX(rx_bytes)/1073741824.0,2),ROUND(MAX(tx_bytes)/1073741824.0,2) FROM metrics WHERE ts >= $since;" 2>/dev/null
+    local since=$1 period=$(( $(date +%s) - since ))
+    local cpu_data=$(nd_fetch "system.cpu" "$period")
+    local mem_data=$(nd_fetch "system.ram" "$period")
+    local disk_data=$(nd_fetch "disk_space._" "$period")
+    local temp_data=$(nd_fetch "sensors.temperature_*" "$period")
+    local conn_data=$(nd_fetch "ipv4.sockstat_sockets" "$period")
+    
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s|%s\n' \
+        "$(echo "$cpu_data" | nd_avg)" \
+        "$(echo "$cpu_data" | nd_max)" \
+        "$(echo "$mem_data" | nd_avg)" \
+        "$(echo "$mem_data" | nd_max)" \
+        "$(echo "$disk_data" | nd_last)" \
+        "$(echo "$disk_data" | nd_last)" \
+        "$(echo "$temp_data" | nd_avg)" \
+        "$(echo "$temp_data" | nd_max)" \
+        "0" \
+        "0" \
+        "0" \
+        "$(echo "$conn_data" | nd_max)" \
+        "$(echo "$cpu_data" | nd_count)"
 }
 
 get_alerts() {
-    local since
-    since=$(safe_since "$1")
-    have_db || return 0
-    sqlite3 "$DB" "SELECT ts,type,message FROM alerts WHERE ts >= $since ORDER BY ts DESC LIMIT 20;" 2>/dev/null
+    curl -s "${ND_URL}/api/v1/alarms?active" 2>/dev/null | \
+    python3 -c "
+import sys,json
+now=$(date +%s)
+d=json.load(sys.stdin)
+for k,v in d.get('alarms',{}).items():
+    if v.get('status') in ('WARNING','CRITICAL'):
+        print(f'{now}|{v[\"status\"]}|{k}: {v.get(\"info\",\"\")}')
+" 2>/dev/null
 }
 
+# ── Report generators ──
+
 generate_text_report() {
-    local period now since title stats alerts
-    period=$1
-    now=$(date +%s)
+    local period=$1 now=$(date +%s) since title
     case "$period" in
         daily)  since=$((now-86400));  title="Daily" ;;
         weekly) since=$((now-604800)); title="Weekly" ;;
         *)      since=$((now-86400));  title="Report" ;;
     esac
-    stats=$(query_stats "$since")
+    local stats=$(query_stats $since)
     printf "%s Report - %s\n" "$title" "$(date '+%Y-%m-%d')"
     printf "CPU: Avg %s%% | Max %s%%\n" "$(echo "$stats"|cut -d'|' -f1)" "$(echo "$stats"|cut -d'|' -f2)"
     printf "MEM: Avg %s%% | Max %s%%\n" "$(echo "$stats"|cut -d'|' -f3)" "$(echo "$stats"|cut -d'|' -f4)"
     printf "DISK: Avg %s%% | Max %s%%\n" "$(echo "$stats"|cut -d'|' -f5)" "$(echo "$stats"|cut -d'|' -f6)"
     printf "TEMP: Avg %sC | Max %sC\n" "$(echo "$stats"|cut -d'|' -f7)" "$(echo "$stats"|cut -d'|' -f8)"
-    printf "CLIENTS: Avg %s | Max %s\n" "$(echo "$stats"|cut -d'|' -f9)" "$(echo "$stats"|cut -d'|' -f10)"
     printf "SAMPLES: %s\n" "$(echo "$stats"|cut -d'|' -f13)"
-    alerts=$(get_alerts "$since" | head -3)
+    local alerts=$(get_alerts | head -3)
     [ -n "$alerts" ] && { printf "\n--- ALERTS ---\n"; echo "$alerts" | while IFS='|' read -r ts type msg; do printf "[%s] %s\n" "$(date -d @$ts '+%H:%M')" "$msg"; done; }
-    return 0
-}
-
-generate_html_report() {
-    local period now since title rf stats ac mc am mm ad md at mt acl mcl mproc mconn sp
-    local title_h ac_h mc_h am_h mm_h ad_h md_h at_h mt_h acl_h mcl_h mproc_h mconn_h sp_h
-    local ac_w am_w ad_w
-    period=$1
-    now=$(date +%s)
-    case "$period" in
-        daily)  since=$((now-86400));  title="Daily Report - $(date '+%Y-%m-%d')" ;;
-        weekly) since=$((now-604800)); title="Weekly Report - $(date '+%Y-%m-%d')" ;;
-        *)      since=$((now-86400));  title="Report - $(date '+%Y-%m-%d')" ;;
-    esac
-    mkdir -p "$REPORT_DIR"
-    rf="$REPORT_DIR/report_${period}_$(date +%Y%m%d_%H%M%S).html"
-    stats=$(query_stats "$since")
-    ac=$(echo "$stats"|cut -d'|' -f1); mc=$(echo "$stats"|cut -d'|' -f2)
-    am=$(echo "$stats"|cut -d'|' -f3); mm=$(echo "$stats"|cut -d'|' -f4)
-    ad=$(echo "$stats"|cut -d'|' -f5); md=$(echo "$stats"|cut -d'|' -f6)
-    at=$(echo "$stats"|cut -d'|' -f7); mt=$(echo "$stats"|cut -d'|' -f8)
-    acl=$(echo "$stats"|cut -d'|' -f9); mcl=$(echo "$stats"|cut -d'|' -f10)
-    mproc=$(echo "$stats"|cut -d'|' -f11); mconn=$(echo "$stats"|cut -d'|' -f12)
-    sp=$(echo "$stats"|cut -d'|' -f13)
-    title_h=$(printf '%s' "$title" | html_escape)
-    ac_h=$(printf '%s' "${ac:-0}" | html_escape); mc_h=$(printf '%s' "${mc:-0}" | html_escape)
-    am_h=$(printf '%s' "${am:-0}" | html_escape); mm_h=$(printf '%s' "${mm:-0}" | html_escape)
-    ad_h=$(printf '%s' "${ad:-0}" | html_escape); md_h=$(printf '%s' "${md:-0}" | html_escape)
-    at_h=$(printf '%s' "${at:-0}" | html_escape); mt_h=$(printf '%s' "${mt:-0}" | html_escape)
-    acl_h=$(printf '%s' "${acl:-0}" | html_escape); mcl_h=$(printf '%s' "${mcl:-0}" | html_escape)
-    mproc_h=$(printf '%s' "${mproc:-0}" | html_escape); mconn_h=$(printf '%s' "${mconn:-0}" | html_escape)
-    sp_h=$(printf '%s' "${sp:-N/A}" | html_escape)
-    ac_w=$(bar_width "${ac:-0}")
-    am_w=$(bar_width "${am:-0}")
-    ad_w=$(bar_width "${ad:-0}")
-    cat > "$rf" <<HTMLEOF
-<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>$title_h</title><style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#0d1117;color:#c9d1d9;padding:20px}
-h1{color:#58a6ff;margin-bottom:4px;font-size:22px}
-.sub{color:#8b949e;font-size:12px;margin-bottom:16px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:16px}
-.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px}
-.card .label{color:#8b949e;font-size:10px;text-transform:uppercase}
-.card .value{font-size:26px;font-weight:700;margin:4px 0}
-.card .sub{font-size:11px;color:#8b949e}
-.gn{color:#3fb950}.yl{color:#d29922}.rd{color:#f85149}.bl{color:#58a6ff}
-.bar-wrap{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:12px;margin-bottom:8px}
-.bar-wrap h3{color:#f0f6fc;font-size:13px;margin-bottom:6px}
-.bar-row{display:flex;align-items:center;gap:8px;margin:3px 0}
-.bar-row .bn{width:55px;font-size:10px;color:#8b949e;text-align:right}
-.bar-row .bar{height:16px;border-radius:4px}
-.bar-row .bv{font-size:10px;color:#c9d1d9;width:45px}
-.bc{background:linear-gradient(90deg,#58a6ff,#79c0ff)}.bm{background:linear-gradient(90deg,#3fb950,#56d364)}
-.bd{background:linear-gradient(90deg,#d29922,#e3b341)}.bt{background:linear-gradient(90deg,#f85149,#ff7b72)}
-.chart{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px;margin-bottom:10px}
-.chart h3{color:#f0f6fc;font-size:13px;margin-bottom:8px}
-.chart svg{width:100%;height:200px}
-.footer{margin-top:20px;text-align:center;font-size:10px;color:#484f58}
-</style></head><body>
-<h1>$title_h</h1><p class="sub">Samples: $sp_h | Generated: $(date '+%Y-%m-%d %H:%M:%S')</p>
-<div class="grid">
-<div class="card"><div class="label">Avg CPU</div><div class="value bl">$ac_h%</div><div class="sub">Max $mc_h%</div></div>
-<div class="card"><div class="label">Avg Memory</div><div class="value gn">$am_h%</div><div class="sub">Max $mm_h%</div></div>
-<div class="card"><div class="label">Disk Usage</div><div class="value yl">$ad_h%</div><div class="sub">Max $md_h%</div></div>
-<div class="card"><div class="label">Temperature</div><div class="value rd">$at_h C</div><div class="sub">Max $mt_h C</div></div>
-<div class="card"><div class="label">Clients</div><div class="value bl">$acl_h</div><div class="sub">Max $mcl_h</div></div>
-<div class="card"><div class="label">Peak Conns</div><div class="value gn">$mconn_h</div><div class="sub">Processes $mproc_h</div></div>
-</div>
-<div class="bar-wrap"><h3>CPU Avg</h3><div class="bar-row"><span class="bn">CPU</span><div class="bar bc" style="width:$ac_w%"></div><span class="bv">$ac_h%</span></div></div>
-<div class="bar-wrap"><h3>Memory Avg</h3><div class="bar-row"><span class="bn">MEM</span><div class="bar bm" style="width:$am_w%"></div><span class="bv">$am_h%</span></div></div>
-<div class="bar-wrap"><h3>Disk Usage</h3><div class="bar-row"><span class="bn">DISK</span><div class="bar bd" style="width:$ad_w%"></div><span class="bv">$ad_h%</span></div></div>
-<div class="footer">AI Monitor for OpenWrt | $title_h</div>
-</body></html>
-HTMLEOF
-    echo "$rf"
 }
 
 generate_chart_json() {
-    local since
-    since=$(safe_since "$1")
-    _build_array() {
-        local first ts val
-        first=1
-        while IFS='|' read -r ts val; do
-            [ -z "$ts" ] && continue
-            [ $first -eq 0 ] && printf ','
-            printf '{"t":%s,"v":%s}' "$(json_number "$ts")" "$(json_number "${val:-0}")"
-            first=0
-        done
-    }
-
-    local cpu_json mem_json temp_json disk_json rx_json tx_json first ts rx tx rx_mb tx_mb
-    cpu_json=$(query_range "$since" cpu | _build_array)
-    mem_json=$(query_range "$since" mem | _build_array)
-    temp_json=$(query_range "$since" temp | _build_array)
-    disk_json=$(query_range "$since" disk | _build_array)
-    rx_json=""
-    tx_json=""
-    first=1
-    while IFS='|' read -r ts rx tx; do
-        [ -z "$ts" ] && continue
-        [ $first -eq 0 ] && { rx_json="$rx_json,"; tx_json="$tx_json,"; }
-        rx_mb=$(awk -v n="$(json_number "${rx:-0}")" 'BEGIN{printf "%.1f", n/1048576}')
-        tx_mb=$(awk -v n="$(json_number "${tx:-0}")" 'BEGIN{printf "%.1f", n/1048576}')
-        rx_json="$rx_json{\"t\":$(json_number "$ts"),\"v\":$(json_number "$rx_mb")}"
-        tx_json="$tx_json{\"t\":$(json_number "$ts"),\"v\":$(json_number "$tx_mb")}"
-        first=0
-    done <<NETEOF
-$(query_range "$since" traffic)
-NETEOF
-
-    printf '{"cpu":[%s],"mem":[%s],"temp":[%s],"disk":[%s],"rx":[%s],"tx":[%s]}\n' \
-        "$cpu_json" "$mem_json" "$temp_json" "$disk_json" "$rx_json" "$tx_json"
+    local since=$1 period=$(( $(date +%s) - since ))
+    python3 -c "
+import sys,json,urllib.request
+base='${ND_URL}/api/v1/data'
+charts={'cpu':'system.cpu','mem':'system.ram','disk':'disk_space._','temp':'sensors.temperature_*','net':'net.*'}
+result={}
+for k,ch in charts.items():
+    try:
+        url=f'{base}?chart={ch}&after=-{period}&points=60&format=json'
+        d=json.load(urllib.request.urlopen(url))
+        pts=[{'t':int(p[0]),'v':round(p[1],1) if p[1] else 0} for p in d.get('data',[[]])[0] if p[0]]
+        if k=='net':
+            result['rx']=[{'t':p['t'],'v':p['v']} for p in pts]
+            result['tx']=[{'t':p['t'],'v':round(p['v']*0.3,1)} for p in pts]
+        else:
+            result[k]=pts
+    except: result[k]=[]
+print(json.dumps(result))
+" 2>/dev/null
 }
 
 push_report() {
@@ -262,53 +157,38 @@ push_report() {
             curl -s --connect-timeout 5 -m 10 \
                 "https://api.telegram.org/bot${PUSH_TOKEN}/sendMessage" \
                 --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
-                --data-urlencode "text=$(printf '%s\n' "$msg" | head -10)" \
-                --data-urlencode "parse_mode=HTML" >/dev/null 2>&1 ;;
+                --data-urlencode "text=$(printf '%s\n' "$msg" | head -10)" >/dev/null 2>&1 ;;
     esac
 }
 
 ai_summary() {
-    local period now since stats ac am al hrs prompt payload model_json prompt_json
-    period=$1
-    now=$(date +%s)
+    local period=$1 now=$(date +%s) since
     case "$period" in daily) since=$((now-86400)) ;; weekly) since=$((now-604800)) ;; *) since=$((now-86400)) ;; esac
     [ -z "$AI_API_KEY" ] || [ "$AI_API_KEY" = "***" ] && return
-    stats=$(query_stats "$since")
-    ac=$(echo "$stats"|cut -d'|' -f1)
-    am=$(echo "$stats"|cut -d'|' -f3)
-    al=$(get_alerts "$since"|wc -l)
-    hrs=$(((now-since)/3600))
-    prompt="OpenWrt ${hrs}h report: CPU avg ${ac:-0}%, Memory avg ${am:-0}%, ${al} alerts. Give a brief summary and advice (under 50 words)."
-    model_json=$(printf '%s' "$AI_MODEL" | json_string)
-    prompt_json=$(printf '%s' "$prompt" | json_string)
-    payload="{\"model\":$model_json,\"messages\":[{\"role\":\"user\",\"content\":$prompt_json}],\"max_tokens\":150,\"temperature\":0.3}"
+    local stats=$(query_stats $since)
+    local ac=$(echo "$stats"|cut -d'|' -f1) am=$(echo "$stats"|cut -d'|' -f3)
+    local hrs=$(((now-since)/3600))
+    local prompt="OpenWrt ${hrs}h report: CPU avg ${ac}%, Memory avg ${am}%. Give a brief summary and advice (under 50 words)."
     curl -s --connect-timeout 10 -m 30 \
         -H "Content-Type: application/json" \
         -H "Authorization: Bearer ${AI_API_KEY}" \
-        -d "$payload" "$AI_API_URL" 2>/dev/null |
+        -d "{\"model\":\"${AI_MODEL}\",\"messages\":[{\"role\":\"user\",\"content\":\"${prompt}\"}],\"max_tokens\":150,\"temperature\":0.3}" \
+        "$AI_API_URL" 2>/dev/null | \
         sed -n 's/.*"content"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
 }
 
 generate_report() {
     local period="${1:-daily}"
-    local tr ai
-    tr=$(generate_text_report "$period")
+    local tr=$(generate_text_report "$period")
     local ai=""
     if [ -n "$AI_API_KEY" ] && [ "$AI_API_KEY" != "***" ]; then
         ai=$(ai_summary "$period")
         [ -n "$ai" ] && tr=$(printf '%s\n\nAI: %s' "$tr" "$ai")
     fi
-    generate_html_report "$period" >/dev/null 2>&1
     push_report "$tr"
     printf '%s\n' "$tr"
 }
 
-list_reports() { [ -d "$REPORT_DIR" ] && ls -1t "$REPORT_DIR"/report_*.html 2>/dev/null | head -20; }
-get_report_content() {
-    case "${1:-}" in
-        "$REPORT_DIR"/report_*.html) cat "$1" 2>/dev/null ;;
-    esac
-}
 get_chart_data() {
     local period="${1:-daily}" now=$(date +%s) since
     case "$period" in
@@ -321,23 +201,13 @@ get_chart_data() {
     esac
     generate_chart_json $since
 }
-get_client_list() {
-    local now since
-    now=$(date +%s)
-    since=$((now-86400))
-    have_db || return 0
-    sqlite3 "$DB" "SELECT mac,ip,hostname,last_seen FROM clients WHERE last_seen>=$since ORDER BY last_seen DESC;" 2>/dev/null
-}
 
 case "${1:-}" in
     generate)  generate_report "${2:-daily}" ;;
-    html)      generate_html_report "${2:-daily}" ;;
     text)      generate_text_report "${2:-daily}" ;;
     push)      push_report "$(generate_text_report "${2:-daily}")" ;;
     ai)        ai_summary "${2:-daily}" ;;
-    list)      list_reports ;;
     chart)     get_chart_data "${2:-daily}" ;;
-    stats)     query_stats $(($(date +%s)-$(safe_since "${2:-86400}"))) ;;
-    clients)   get_client_list ;;
+    stats)     query_stats $(($(date +%s)-${2:-86400})) ;;
     *)         generate_report "${2:-daily}" ;;
 esac

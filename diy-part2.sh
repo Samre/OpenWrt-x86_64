@@ -12,37 +12,15 @@
 
 REPO_ROOT="${GITHUB_WORKSPACE:-$(pwd)}"
 
-find_ai_monitor_text_files() {
-  find package \( \
-    -path "*/ai-monitor/files/*.sh" \
-    -o -path "*/ai-monitor/files/lib/*.sh" \
-    -o -path "*/ai-monitor/files/*.init" \
-    -o \( -path "*/luci-app-ai-monitor/*" -name "*.htm" \) \
-    -o \( -path "*/luci-app-ai-monitor/*" -name "*.lua" \) \
-  \) -type f 2>/dev/null
-}
-
 # Modify default IP
 sed -i 's/192.168.1.1/192.168.216.10/g' package/base-files/files/bin/config_generate
 
-#2. Clear the login password
+# Clear the login password
 sed -i 's/$1$V4UetPzk$CYXluq4wUazHjmCDBCqXF.//g' package/lean/default-settings/files/zzz-default-settings
 
 # Patch shortcut-fe for Linux 6.18+ compatibility
 SHORTCUT_SRC="package/qca/shortcut-fe/shortcut-fe/src"
 if [ -d "$SHORTCUT_SRC" ]; then
-  if ! grep -q "SFE_SUPPORT_IPV6 1" "$SHORTCUT_SRC/sfe_ipv6.c"; then
-    sed -i '/^#include "sfe_cm.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_ipv6.c"
-  fi
-  if ! grep -q "SFE_SUPPORT_IPV6 1" "$SHORTCUT_SRC/sfe_cm.c"; then
-    sed -i '/^#include "sfe.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_cm.c"
-  fi
-  if ! grep -q "timer_delete_sync(t)" "$SHORTCUT_SRC/sfe_ipv4.c"; then
-    sed -i '/^#include "sfe_cm.h"/i #include <linux/version.h>\n#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 15, 0)\n#define timer_delete_sync(t) del_timer_sync(t)\n#endif' "$SHORTCUT_SRC/sfe_ipv4.c"
-  fi
-  if ! grep -q "timer_delete_sync(t)" "$SHORTCUT_SRC/sfe_ipv6.c"; then
-    sed -i '/^#include "sfe_cm.h"/i #include <linux/version.h>\n#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 15, 0)\n#define timer_delete_sync(t) del_timer_sync(t)\n#endif' "$SHORTCUT_SRC/sfe_ipv6.c"
-  fi
   sed -i 's/from_timer(si, tl, timer)/container_of(tl, struct sfe_ipv4, timer)/g' "$SHORTCUT_SRC/sfe_ipv4.c"
   sed -i 's/from_timer(si, tl, timer)/container_of(tl, struct sfe_ipv6, timer)/g' "$SHORTCUT_SRC/sfe_ipv6.c"
   sed -i 's/del_timer_sync(\&si->timer)/timer_delete_sync(\&si->timer)/g' "$SHORTCUT_SRC/sfe_ipv4.c"
@@ -52,107 +30,7 @@ if [ -d "$SHORTCUT_SRC" ]; then
   echo "shortcut-fe patched for Linux 6.18+"
 fi
 
-# ============================================================
-# Patch ai-monitor: BOM / CRLF / nil guards / CPU calc / sqlite3
-# ============================================================
-echo "Patching ai-monitor for runtime fixes..."
-
-# Step 1: Strip BOM and CRLF from ALL ai-monitor text files
-echo "Stripping BOM and CRLF from ai-monitor files..."
-find_ai_monitor_text_files | while IFS= read -r f; do
-  if head -c 3 "$f" 2>/dev/null | cmp -s - <(printf '\xef\xbb\xbf') 2>/dev/null; then
-    tail -c +4 "$f" > "${f}.tmp" && mv "${f}.tmp" "$f"
-    echo "  BOM removed: $(basename "$f")"
-  fi
-  sed -i 's/\r//g' "$f" 2>/dev/null
-  echo "  Fixed: $(basename "$f")"
-done
-
-# Step 2.5: Fix ai-monitor Makefile — remove missing hard dependencies
-AI_MK=$(find package -path "*/ai-monitor/Makefile" -type f 2>/dev/null | head -1)
-if [ -f "$AI_MK" ]; then
-  sed -i 's/^[[:space:]]*DEPENDS:=.*/  DEPENDS:=/' "$AI_MK"
-  echo "  ai-monitor Makefile: hard deps removed"
-fi
-# Step 2.6: Build standalone sqlite3 binary (bypass feed version conflict)
-SQLITE_BIN="package/lean/ai-monitor/files/sqlite3"
-if [ ! -f "$SQLITE_BIN" ]; then
-  echo "Building standalone sqlite3 (static, no feed dependency)..."
-  SQLITE_VER="3450300"
-  curl -sL "https://www.sqlite.org/2024/sqlite-amalgamation-${SQLITE_VER}.zip" -o /tmp/sqlite.zip
-  unzip -oq /tmp/sqlite.zip -d /tmp/sqlite-src
-  SRC=$(echo /tmp/sqlite-src/sqlite-amalgamation-*)
-  gcc -static -s -O2 -DNDEBUG \
-    -DSQLITE_THREADSAFE=0 \
-    -DSQLITE_OMIT_LOAD_EXTENSION \
-    -DSQLITE_OMIT_DEPRECATED \
-    "$SRC/shell.c" "$SRC/sqlite3.c" \
-    -o /tmp/sqlite3 -lpthread -ldl -lm 2>/dev/null
-  if [ -f /tmp/sqlite3 ]; then
-    mkdir -p "$(dirname "$SQLITE_BIN")"
-    cp /tmp/sqlite3 "$SQLITE_BIN"
-    chmod +x "$SQLITE_BIN"
-    # Also copy to files/ overlay for firmware inclusion
-    mkdir -p files/usr/bin
-    cp "$SQLITE_BIN" files/usr/bin/sqlite3 && echo "  sqlite3 copied to files/ overlay"
-    echo "  sqlite3 built OK ($(du -h /tmp/sqlite3 | cut -f1))"
-  else
-    echo "  WARNING: sqlite3 compile failed, DB features unavailable"
-  fi
-fi
-
-# Step 3: Fix collect_cpu - use /proc/stat (no top/nproc dependency)
-COLL=$(find package -path "*/ai-monitor/files/lib/collector.sh" 2>/dev/null | head -1)
-if [ -f "$COLL" ]; then
-  awk 'BEGIN{p=0}
-    /^collect_cpu\(\)/ {p=1; print "collect_cpu() {"
-      print "  local cpu=$(awk '\''/^cpu /{total=$2+$3+$4+$5+$6+$7+$8;idle=$5;if(total>0)printf \"%.0f\",(total-idle)*100/total;else print \"0\"}'\'' /proc/stat 2>/dev/null)"
-      print "  [ -z \"$cpu\" ] && cpu=$(awk '\''{printf \"%.0f\",$1*100}'\'' /proc/loadavg 2>/dev/null)"
-      print "  echo \"${cpu:-0}\""
-      print "}"; next}
-    /^[a-z_]+\(\)/ {if(p){p=0}}
-    !p' "$COLL" > /tmp/ai_collector_fix && mv /tmp/ai_collector_fix "$COLL"
-  echo "  collect_cpu patched: /proc/stat + loadavg fallback"
-fi
-
-# Step 4: Fix LuCI template nil guard
-for tmpl in $(find package -path "*/luci-app-ai-monitor/luasrc/view/*.htm" -type f 2>/dev/null); do
-  sed -i 's/tonumber(\(snap\.[a-z_]*\))/(tonumber(\1) or 0)/g' "$tmpl"
-done
-
-# Step 5: Inject overlay files (dashboard, log, reporter)
-OVERLAY="$REPO_ROOT/ai-monitor-overlay"
-if [ -d "$OVERLAY" ]; then
-  DASH=$(find package -path "*/luci-app-ai-monitor/luasrc/view/ai-monitor/dashboard.htm" -type f 2>/dev/null | head -1)
-  if [ -f "$DASH" ] && [ -f "$OVERLAY/dashboard.htm" ]; then
-    cp "$OVERLAY/dashboard.htm" "$DASH" && echo "ai-monitor: dashboard injected"
-  fi
-  LOG=$(find package -path "*/luci-app-ai-monitor/luasrc/view/ai-monitor/log.htm" -type f 2>/dev/null | head -1)
-  if [ -f "$LOG" ] && [ -f "$OVERLAY/log.htm" ]; then
-    cp "$OVERLAY/log.htm" "$LOG" && echo "ai-monitor: log.htm injected"
-  fi
-  REP=$(find package -path "*/ai-monitor/files/lib/reporter.sh" -type f 2>/dev/null | head -1)
-  if [ -f "$REP" ] && [ -f "$OVERLAY/reporter.sh" ]; then
-    cp "$OVERLAY/reporter.sh" "$REP" && echo "ai-monitor: enhanced reporter injected"
-  fi
-  # Inject AI Butler script
-  BUTLER=$(find package -path "*/ai-monitor/files/lib/ai-butler.sh" -type f 2>/dev/null | head -1)
-  if [ -f "$BUTLER" ] && [ -f "$OVERLAY/ai-butler.sh" ]; then
-    cp "$OVERLAY/ai-butler.sh" "$BUTLER" && echo "ai-monitor: AI butler injected"
-  fi
-  # Schedule health monitor cron (every 5 min)
-  mkdir -p files/etc/crontabs
-  echo "*/5 * * * * /usr/lib/ai-monitor/ai-butler.sh monitor" >> files/etc/crontabs/root
-fi
-
-# Step 6: Post-injection CRLF cleanup
-echo "Post-injection CRLF cleanup..."
-find_ai_monitor_text_files | while IFS= read -r f; do
-  sed -i 's/\r//g' "$f" 2>/dev/null
-done
 # Enable netdata auto-start on boot
 mkdir -p files/etc/rc.d
 ln -sf ../init.d/netdata files/etc/rc.d/S99netdata 2>/dev/null
 echo "netdata auto-start enabled"
-
-echo "ai-monitor patches applied"

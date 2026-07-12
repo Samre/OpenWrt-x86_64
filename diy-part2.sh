@@ -35,3 +35,16 @@ if [ -d "$SHORTCUT_SRC" ]; then
   sed -i 's/nf_ct_tcp_no_window_check/0/' "$SHORTCUT_SRC/sfe_cm.c"
   echo "shortcut-fe patched for Linux 6.18+"
 fi
+
+# Add AI packages feeds
+echo "Adding AI package feeds..."
+if ! grep -q "utakamo/oasis" feeds.conf.default 2>/dev/null; then
+  echo "src-git oasis https://github.com/utakamo/oasis.git" >> feeds.conf.default
+fi
+if ! grep -q "openwrt-hermes-agent" feeds.conf.default 2>/dev/null; then
+  echo "src-git hermeswrt https://github.com/BiaBuzz/openwrt-hermes-agent.git" >> feeds.conf.default
+fi
+./scripts/feeds update oasis hermeswrt 2>/dev/null
+./scripts/feeds install -a -p oasis 2>/dev/null
+./scripts/feeds install -a -p hermeswrt 2>/dev/null
+echo "AI feeds added"

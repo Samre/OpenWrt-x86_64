@@ -47,4 +47,6 @@ if [ ! -d package/hermes/luci-app-hermeswrt ]; then
     [ -d "/tmp/hermes-src/packages/$pkg" ] && ln -sf "/tmp/hermes-src/packages/$pkg" "package/hermes/$pkg"
   done
   echo "  hermes packages linked"
+  # Strip Python deps from hermes-agent (none in feed)
+  [ -f "package/hermes/hermes-agent/Makefile" ] && sed -i "/^  DEPENDS:=/s/.*/  DEPENDS:=/" "package/hermes/hermes-agent/Makefile" && echo "  hermes-agent: deps stripped"
 fi

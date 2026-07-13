@@ -38,16 +38,7 @@ fi
 
 # Add AI packages: clone directly and symlink into package/
 echo "Adding AI packages..."
-mkdir -p package/oasis package/hermes
-
-# oasis (OpenWrt AI Assistant)
-if [ ! -d package/oasis/luci-app-oasis ]; then
-  git clone --depth 1 https://github.com/utakamo/oasis.git /tmp/oasis-src 2>/dev/null
-  for pkg in luci-app-oasis oasis oasis-mod-*; do
-    [ -d "/tmp/oasis-src/$pkg" ] && ln -sf "/tmp/oasis-src/$pkg" "package/oasis/$pkg"
-  done
-  echo "  oasis packages linked"
-fi
+mkdir -p package/hermes
 
 # hermes-agent (HermesWrt)
 if [ ! -d package/hermes/luci-app-hermeswrt ]; then

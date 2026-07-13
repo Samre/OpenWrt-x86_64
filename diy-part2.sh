@@ -36,15 +36,24 @@ if [ -d "$SHORTCUT_SRC" ]; then
   echo "shortcut-fe patched for Linux 6.18+"
 fi
 
-# Add AI packages feeds
-echo "Adding AI package feeds..."
-if ! grep -q "utakamo/oasis" feeds.conf.default 2>/dev/null; then
-  echo "src-git oasis https://github.com/utakamo/oasis.git" >> feeds.conf.default
+# Add AI packages: clone directly and symlink into package/
+echo "Adding AI packages..."
+mkdir -p package/oasis package/hermes
+
+# oasis (OpenWrt AI Assistant)
+if [ ! -d package/oasis/luci-app-oasis ]; then
+  git clone --depth 1 https://github.com/utakamo/oasis.git /tmp/oasis-src 2>/dev/null
+  for pkg in luci-app-oasis oasis oasis-mod-*; do
+    [ -d "/tmp/oasis-src/$pkg" ] && ln -sf "/tmp/oasis-src/$pkg" "package/oasis/$pkg"
+  done
+  echo "  oasis packages linked"
 fi
-if ! grep -q "openwrt-hermes-agent" feeds.conf.default 2>/dev/null; then
-  echo "src-git hermeswrt https://github.com/BiaBuzz/openwrt-hermes-agent.git" >> feeds.conf.default
+
+# hermes-agent (HermesWrt)
+if [ ! -d package/hermes/luci-app-hermeswrt ]; then
+  git clone --depth 1 https://github.com/BiaBuzz/openwrt-hermes-agent.git /tmp/hermes-src 2>/dev/null
+  for pkg in hermes-agent hermes-vendor luci-app-hermeswrt; do
+    [ -d "/tmp/hermes-src/packages/$pkg" ] && ln -sf "/tmp/hermes-src/packages/$pkg" "package/hermes/$pkg"
+  done
+  echo "  hermes packages linked"
 fi
-./scripts/feeds update oasis hermeswrt 2>/dev/null
-./scripts/feeds install -a -p oasis 2>/dev/null
-./scripts/feeds install -a -p hermeswrt 2>/dev/null
-echo "AI feeds added"

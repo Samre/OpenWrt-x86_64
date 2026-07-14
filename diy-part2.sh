@@ -49,4 +49,6 @@ if [ ! -d package/hermes/luci-app-hermeswrt ]; then
   echo "  hermes packages linked"
   # Strip Python deps from hermes-agent (none in feed)
   [ -f "package/hermes/hermes-agent/Makefile" ] && sed -i "/^  DEPENDS:=/s/.*/  DEPENDS:=/" "package/hermes/hermes-agent/Makefile" && echo "  hermes-agent: deps stripped"
+  # Fix version: v0.16.0 tag doesn't exist, use latest
+  [ -f "package/hermes/hermes-agent/Makefile" ] && sed -i 's/PKG_VERSION:=0.16.0/PKG_VERSION:=2026.7.7.2/' "package/hermes/hermes-agent/Makefile" && echo '  hermes-agent: version fixed to v2026.7.7.2'
 fi

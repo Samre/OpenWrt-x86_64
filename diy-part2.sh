@@ -35,20 +35,3 @@ if [ -d "$SHORTCUT_SRC" ]; then
   sed -i 's/nf_ct_tcp_no_window_check/0/' "$SHORTCUT_SRC/sfe_cm.c"
   echo "shortcut-fe patched for Linux 6.18+"
 fi
-
-# Add AI packages: clone directly and symlink into package/
-echo "Adding AI packages..."
-mkdir -p package/hermes
-
-# hermes-agent (HermesWrt)
-if [ ! -d package/hermes/luci-app-hermeswrt ]; then
-  git clone --depth 1 https://github.com/BiaBuzz/openwrt-hermes-agent.git /tmp/hermes-src 2>/dev/null
-  for pkg in hermes-agent hermes-vendor luci-app-hermeswrt; do
-    [ -d "/tmp/hermes-src/packages/$pkg" ] && ln -sf "/tmp/hermes-src/packages/$pkg" "package/hermes/$pkg"
-  done
-  echo "  hermes packages linked"
-  # Strip Python deps from hermes-agent (none in feed)
-  [ -f "package/hermes/hermes-agent/Makefile" ] && sed -i "/^  DEPENDS:=/s/.*/  DEPENDS:=/" "package/hermes/hermes-agent/Makefile" && echo "  hermes-agent: deps stripped"
-  # Fix version: v0.16.0 tag doesn't exist, use latest
-  [ -f "package/hermes/hermes-agent/Makefile" ] && sed -i 's/PKG_VERSION:=0.16.0/PKG_VERSION:=2026.7.7.2/' "package/hermes/hermes-agent/Makefile" && echo '  hermes-agent: version fixed to v2026.7.7.2'
-fi

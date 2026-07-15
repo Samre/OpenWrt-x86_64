@@ -35,3 +35,14 @@ if [ -d "$SHORTCUT_SRC" ]; then
   sed -i 's/nf_ct_tcp_no_window_check/0/' "$SHORTCUT_SRC/sfe_cm.c"
   echo "shortcut-fe patched for Linux 6.18+"
 fi
+
+# Add tgpt - AI chatbot in terminal (Go binary, zero deps)
+echo "Installing tgpt AI chatbot..."
+mkdir -p files/usr/bin
+TGPT_URL=$(curl -s https://api.github.com/repos/aandrew-me/tgpt/releases/latest | grep "browser_download_url.*linux-amd64" | head -1 | cut -d'"' -f4)
+if [ -n "$TGPT_URL" ]; then
+  curl -sL "$TGPT_URL" -o files/usr/bin/tgpt && chmod +x files/usr/bin/tgpt
+  echo "  tgpt installed ($(du -h files/usr/bin/tgpt | cut -f1))"
+else
+  echo "  WARNING: tgpt download failed"
+fi

@@ -14,7 +14,7 @@ name: Update Checker
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 16 * * 5'  # Fridays at 00:00 Asia/Shanghai (UTC+8)
+    - cron: '0 */6 * * *'  # Every 6 hours
 
 env:
   UPSTREAM_REPO: coolsnowwolf/lede
@@ -46,27 +46,36 @@ jobs:
 
         if [ -n "$LAST_KNOWN" ] && [ "$LAST_KNOWN" = "$LATEST_SHA" ]; then
           echo "changed=false" >> $GITHUB_OUTPUT
-          echo "No new commits since last check."
+          echo "No new commits since last successful build."
         else
           echo "changed=true" >> $GITHUB_OUTPUT
-          echo "New commits detected or first run. Triggering build."
+          echo "New commits detected or previous build failed. Triggering build."
+        fi
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Check for running build
+      id: running
+      if: steps.check.outputs.changed == 'true'
+      run: |
+        set -euo pipefail
+
+        RUNNING=$(gh run list --workflow build-openwrt.yml --status in_progress \
+          --limit 1 --json databaseId --jq '.[0].databaseId // empty' || true)
+
+        if [ -n "$RUNNING" ]; then
+          echo "skip=true" >> $GITHUB_OUTPUT
+          echo "A build is already running ($RUNNING); skipping this dispatch."
+        else
+          echo "skip=false" >> $GITHUB_OUTPUT
         fi
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Trigger build workflow
-      if: steps.check.outputs.changed == 'true'
+      if: steps.check.outputs.changed == 'true' && steps.running.outputs.skip == 'false'
       uses: peter-evans/repository-dispatch@v3
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         event-type: update-detected
         client-payload: '{"sha": "${{ steps.check.outputs.latest_sha }}"}'
-
-    - name: Update tracking tag
-      if: steps.check.outputs.changed == 'true'
-      run: |
-        set -euo pipefail
-        git config user.name "github-actions[bot]"
-        git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -f -a upstream-tracker -m "${{ steps.check.outputs.latest_sha }}"
-        git push -f origin upstream-tracker

@@ -22,6 +22,8 @@ on:
 env:
   REPO_URL: https://github.com/Samre/lede
   REPO_BRANCH: master
+  UPSTREAM_REPO: coolsnowwolf/lede
+  UPSTREAM_BRANCH: master
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
@@ -120,6 +122,21 @@ jobs:
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
+    - name: Mark upstream as built
+      if: steps.compile.outputs.status == 'success' && !cancelled()
+      run: |
+        set -euo pipefail
+
+        LATEST_SHA=$(gh api "repos/$UPSTREAM_REPO/commits/$UPSTREAM_BRANCH" \
+          --jq '.sha')
+
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag -f -a upstream-tracker -m "$LATEST_SHA"
+        git push -f origin upstream-tracker
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
     - name: Check space usage
       if: (!cancelled())
       run: df -hT
@@ -133,7 +150,7 @@ jobs:
 
     - name: Organize files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages
@@ -149,7 +166,7 @@ jobs:
 
     - name: Generate release tag
       id: tag
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         echo "::set-output name=release_tag::$(date +"%Y.%m.%d-%H%M")"
         touch release.txt

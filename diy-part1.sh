@@ -36,5 +36,10 @@ sudo rm -rf \
   /usr/local/share/chromium \
   /usr/local/lib/node_modules 2>/dev/null || true
 
+# GH Actions runner preinstalls /usr/local/bin/runc, which triggers the moby
+# binary-daemon host-executable copy bug (openwrt/packages#30355); removing it
+# makes the copy step return early. Not needed by the OpenWrt build itself.
+sudo mv /usr/local/bin/runc /usr/local/bin/runc.bak 2>/dev/null || true
+
 echo "=== After cleanup ==="
 df -hT $PWD

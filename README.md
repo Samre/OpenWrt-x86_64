@@ -34,7 +34,6 @@
 
 **代理上网**
 - **OpenClash**（mihomo 内核）· **PassWall** · **PassWall2**
-- 内核与组件：mihomo、sing-box、xray-core、hysteria、naiveproxy、trojan-plus / trojan-go、brook、shadowsocks-libev / rust、shadowsocksr-libev、tuic、simple-obfs、v2ray-plugin、xray-plugin、chinadns-ng、dns2socks、ipt2socks、geoview 等
 
 **DNS 与去广告**
 - **mosdns v5**（含 LuCI 界面）
@@ -74,12 +73,6 @@
 3. **构建期定制**：编辑 `diy-part2.sh`（feeds 更新后执行），当前包含：修改默认 IP、清除 root 密码、shortcut-fe Linux 6.18+ 内核兼容补丁、内置 tgpt。
 
 修改后推送并在 Actions 页手动触发即可；或等待每周自动检查。
-
-## 已知注意事项
-
-- 固件为 **iptables 架构**，nikki / momo 等 firewall4（nftables）专属插件无法编入，mihomo 需求由 OpenClash 覆盖；
-- 官方 packages 源的 dockerd 29.6.1 存在构建缺陷（[openwrt/packages#30355](https://github.com/openwrt/packages/issues/30355)），`diy-part1.sh` 已内置规避措施（移除 runner 宿主机的 runc）；
-- 多个透明代理插件（OpenClash / PassWall / PassWall2）已同时编入，但**运行时只能启用其中一个**。
 
 ## 致谢
 

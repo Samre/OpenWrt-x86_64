@@ -50,7 +50,6 @@
 - ttyd 网页终端、UPnP、定时重启（`luci-app-watchcat`）
 - DDNS（含阿里云 / DNSPod 脚本）、ddnsto 内网穿透
 - vlmcsd（KMS 激活）、coremark 跑分、软件包管理器
-- **tgpt**：终端 AI 聊天工具（`ssh` 进路由直接运行 `tgpt "你的问题"`）
 
 **界面**
 - Argon 主题 + Argon 配置插件，中文界面

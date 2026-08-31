@@ -30,8 +30,6 @@
 
 ## 内置插件
 
-以下清单以最新固件的 manifest 实际内容为准：
-
 **代理上网**
 - **OpenClash**（mihomo 内核）· **PassWall** · **PassWall2**
 

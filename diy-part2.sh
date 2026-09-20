@@ -16,6 +16,10 @@
 
 set -euo pipefail
 
+# Preprocessor marker inserted into the shortcut-fe sources; also used to keep
+# the insertion idempotent when the script runs more than once.
+SFE_SUPPORT_IPV6_MARK="SFE_SUPPORT_IPV6 1"
+
 # --- Default LAN IP ---------------------------------------------------------
 # The firmware ships 192.168.216.10 instead of the upstream 192.168.1.1.
 # WARNING: config_generate only creates /etc/config/network when no network
@@ -77,11 +81,51 @@ if [ ! -d "$SHORTCUT_SRC" ]; then
   exit 1
 fi
 
-# The container_of/del_timer_sync rewrites below apply to every source file in
-# this directory that uses them, so check they are all present first.
+# IPv6 entry points: sfe_cm.h chooses with `#ifdef SFE_SUPPORT_IPV6` between an
+# extern declaration and a do-nothing static-inline stub. The package Makefile
+# passes EXTRA_CFLAGS+="-DSFE_SUPPORT_IPV6", but the package builds three
+# modules (shortcut-fe, shortcut-fe-ipv6, shortcut-fe-cm) from this one source
+# tree and the macro does not reach every translation unit. Whichever unit
+# reaches sfe_cm.h without it defines stubs whose names collide with the real
+# functions in sfe_ipv6.c:
+#
+#   sfe_ipv6.c:1015: error: redefinition of 'sfe_ipv6_mark_rule'
+#   sfe_cm.h:206: note: previous definition of 'sfe_ipv6_destroy_all_rules_for_dev'
+#
+# Defining the macro once in sfe.h, which every .c file includes before
+# sfe_cm.h, makes all units agree. The #ifndef guard keeps it a no-op where the
+# command line already provides it.
 for src in sfe_ipv4.c sfe_ipv6.c sfe_cm.c; do
   [ -f "$SHORTCUT_SRC/$src" ] || { echo "::error::missing $SHORTCUT_SRC/$src"; exit 1; }
 done
+grep -q '^#include "sfe\.h"' "$SHORTCUT_SRC/sfe_ipv4.c" \
+  || { echo "::error::sfe_ipv4.c no longer includes sfe.h; the SFE_SUPPORT_IPV6 define would not be visible"; exit 1; }
+grep -q '^#include "sfe\.h"' "$SHORTCUT_SRC/sfe_ipv6.c" \
+  || { echo "::error::sfe_ipv6.c no longer includes sfe.h; the SFE_SUPPORT_IPV6 define would not be visible"; exit 1; }
+grep -q '^#include "sfe\.h"' "$SHORTCUT_SRC/sfe_cm.c" \
+  || { echo "::error::sfe_cm.c no longer includes sfe.h; the SFE_SUPPORT_IPV6 define would not be visible"; exit 1; }
+
+if ! grep -q "$SFE_SUPPORT_IPV6_MARK" "$SHORTCUT_SRC/sfe.h"; then
+  # Anchor on the first code line in sfe.h. Anchoring on the license text is
+  # unsafe: "OF THIS SOFTWARE" occurs twice in that comment block and sed
+  # inserts before the first match, which would bury the define in a comment.
+  grep -q '^#define DEBUG_LEVEL' "$SHORTCUT_SRC/sfe.h" \
+    || { echo "::error::cannot locate the sfe.h insertion point (no DEBUG_LEVEL define)"; exit 1; }
+  sed -i '/^#define DEBUG_LEVEL/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe.h"
+  echo "  sfe.h: SFE_SUPPORT_IPV6 defined for every translation unit"
+fi
+grep -q "$SFE_SUPPORT_IPV6_MARK" "$SHORTCUT_SRC/sfe.h" \
+  || { echo "::error::SFE_SUPPORT_IPV6 missing from sfe.h"; exit 1; }
+# Exactly one copy, and after the license block so it cannot land inside a
+# comment (both would break or silently disable the define).
+n=$(grep -c "$SFE_SUPPORT_IPV6_MARK" "$SHORTCUT_SRC/sfe.h")
+[ "$n" -eq 1 ] || { echo "::error::SFE_SUPPORT_IPV6 appears ${n} times in sfe.h"; exit 1; }
+define_line=$(grep -n "$SFE_SUPPORT_IPV6_MARK" "$SHORTCUT_SRC/sfe.h" | cut -d: -f1)
+license_end=$(grep -n '^[[:space:]]*\*/' "$SHORTCUT_SRC/sfe.h" | head -n1 | cut -d: -f1)
+[ -n "$license_end" ] \
+  || { echo "::error::could not locate the end of the sfe.h license block"; exit 1; }
+[ "$define_line" -gt "$license_end" ] \
+  || { echo "::error::SFE_SUPPORT_IPV6 landed inside the sfe.h license comment"; exit 1; }
 
 # from_timer(si, tl, timer) -> container_of(tl, struct sfe_ipvN, timer)
 # del_timer_sync(&si->timer) -> timer_delete_sync(&si->timer)

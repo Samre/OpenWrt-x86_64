@@ -50,6 +50,10 @@ jobs:
       contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    # $GITHUB_ENV does not cross job boundaries, so the pinned revision has to
+    # be handed to the publish job as an output.
+    outputs:
+      source_sha: ${{ steps.resolve.outputs.source_sha }}
 
     steps:
     - name: Checkout
@@ -88,10 +92,12 @@ jobs:
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
     - name: Resolve and pin source revision
+      id: resolve
       working-directory: /workdir/openwrt
       run: |
         set -euo pipefail
         SOURCE_SHA=$(git rev-parse HEAD)
+        echo "source_sha=$SOURCE_SHA" >> $GITHUB_OUTPUT
         echo "SOURCE_SHA=$SOURCE_SHA" >> $GITHUB_ENV
         echo "Building $SOURCE_REPO@$SOURCE_SHA"
 
@@ -230,8 +236,15 @@ jobs:
 
     - name: Mark source revision as built
       id: mark
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
       run: |
         set -euo pipefail
+
+        [ -n "${SOURCE_SHA:-}" ] \
+          || { echo "::error::SOURCE_SHA was not passed from the build job"; exit 1; }
+        echo "compiled revision: $SOURCE_SHA"
 
         # The revision that was compiled may be older than the one the checker
         # dispatched for, so compare against it. When these differ, the newer
@@ -248,13 +261,15 @@ jobs:
         git config user.email "github-actions[bot]@users.noreply.github.com"
         git tag -f -a upstream-tracker -m "$SOURCE_SHA"
         git push -f origin upstream-tracker
-      env:
-        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Generate release tag
       id: tag
+      env:
+        SOURCE_SHA: ${{ needs.build.outputs.source_sha }}
       run: |
         set -euo pipefail
+        [ -n "${SOURCE_SHA:-}" ] \
+          || { echo "::error::SOURCE_SHA was not passed from the build job"; exit 1; }
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
         {
           echo "Automated build of \`$SOURCE_REPO@$SOURCE_SHA\` (branch \`$SOURCE_BRANCH\`)."

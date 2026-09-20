@@ -33,10 +33,9 @@ jobs:
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       with:
         fetch-depth: 0
-        persist-credentials: true
 
     - name: Check for source updates
       id: check
@@ -80,7 +79,7 @@ jobs:
 
     - name: Trigger build workflow
       if: steps.check.outputs.changed == 'true' && steps.running.outputs.skip == 'false'
-      uses: peter-evans/repository-dispatch@v3
+      uses: peter-evans/repository-dispatch@ff45666b9427631e3450c54a1bcbee4d9ff4d7c0  # v3
       with:
         token: ${{ secrets.GITHUB_TOKEN }}
         event-type: update-detected

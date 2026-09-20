@@ -12,6 +12,11 @@
 # revision the update checker tracks, so "upstream updated" can never disagree
 # with "what was actually built".
 #
+# The build job compiles with read-only repository permissions. Only the
+# publish job receives contents: write, so neither the upstream source nor the
+# hundreds of third-party feed Makefiles executed during the build can reach a
+# token that can push to this repository.
+#
 
 name: Build OpenWrt
 
@@ -20,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       ssh:
-        description: 'SSH connection to Actions'
+        description: 'SSH connection to Actions (debugging)'
         required: false
         default: 'false'
 
@@ -32,9 +37,7 @@ env:
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
-  UPLOAD_BIN_DIR: false
   UPLOAD_FIRMWARE: true
-  UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
 concurrency:
@@ -44,14 +47,15 @@ concurrency:
 jobs:
   build:
     permissions:
-      contents: write
-      actions: write
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 350
 
     steps:
     - name: Checkout
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+      with:
+        persist-credentials: false
 
     - name: Initialization environment
       env:
@@ -91,6 +95,18 @@ jobs:
         echo "SOURCE_SHA=$SOURCE_SHA" >> $GITHUB_ENV
         echo "Building $SOURCE_REPO@$SOURCE_SHA"
 
+    - name: Restore package download cache
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
+      with:
+        # ccache is deliberately not cached: CONFIG_CCACHE is not a Kconfig
+        # symbol in this tree, so enabling it would make `make defconfig`
+        # rewrite .config and trip the reconciliation check below.
+        path: /workdir/openwrt/dl
+        key: openwrt-dl-${{ env.SOURCE_SHA }}-${{ hashFiles('.config', 'diy-part1.sh', 'diy-part2.sh') }}
+        restore-keys: |
+          openwrt-dl-${{ env.SOURCE_SHA }}-
+          openwrt-dl-
+
     - name: Load custom feeds
       run: |
         set -euo pipefail
@@ -119,19 +135,38 @@ jobs:
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
     - name: SSH connection to Actions
-      uses: mxschmitt/action-tmate@v3
-      #uses: P3TERX/ssh2actions@v1.0.0
-      if: (github.event.inputs.ssh == 'true' && github.event.inputs.ssh  != 'false') || contains(github.event.action, 'ssh')
-      #env:
-        #TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        #TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      # Debug access hands out an interactive shell on a runner that holds
+      # write-capable credentials later in the build, so it stays limited to
+      # the repository owner.
+      uses: mxschmitt/action-tmate@35b54afac29c97fb54faba5b513f8fbd1882f113  # v3
+      if: github.event.inputs.ssh == 'true' && github.actor == github.repository_owner
+      with:
+        limit-access-to-actor: true
+
+    - name: Prepare configuration
+      run: |
+        set -euo pipefail
+        cd openwrt
+        grep '=y$' .config | cut -d= -f1 | sort -u > /tmp/config.selected
+        make defconfig
+        grep '=y$' .config | cut -d= -f1 | sort -u > /tmp/config.after
+        # `make defconfig` silently drops symbols it cannot resolve (unknown
+        # name, missing dependency, package no longer in any installed feed),
+        # so a committed .config can promise plugins the firmware will not
+        # contain. Fail instead of shipping a different configuration.
+        comm -23 /tmp/config.selected /tmp/config.after > /tmp/config.dropped || true
+        if [ -s /tmp/config.dropped ]; then
+          echo "::error::make defconfig dropped the following selected symbols; update .config or the feeds:"
+          cat /tmp/config.dropped
+          exit 1
+        fi
+        echo "all $(wc -l < /tmp/config.selected) selected symbols survived defconfig"
 
     - name: Download package
       id: package
       run: |
         set -euo pipefail
         cd openwrt
-        make defconfig
         make download -j8 V=s
         find dl -size -1024c -exec ls -l {} \; || true
         find dl -size -1024c -exec rm -f {} \; || true
@@ -151,11 +186,57 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
         echo "SOURCE_SHA=$SOURCE_SHA" >> $GITHUB_ENV
 
-    - name: Mark upstream as built
-      if: steps.compile.outputs.status == 'success' && !cancelled()
+    - name: Check space usage
+      if: (!cancelled())
+      run: |
+        set -euo pipefail
+        df -hT
+
+    - name: Organize files
+      id: organize
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      run: |
+        set -euo pipefail
+        cd openwrt/bin/targets/*/*
+        rm -rf packages
+        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
+        echo "status=success" >> $GITHUB_OUTPUT
+
+    - name: Upload firmware directory
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+      if: steps.organize.outputs.status == 'success' && !cancelled()
+      with:
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
+        retention-days: 14
+
+  publish:
+    needs: build
+    permissions:
+      contents: write
+      actions: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+    - name: Download firmware
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4
+      with:
+        pattern: OpenWrt_firmware*
+        path: firmware
+
+    - name: Mark source revision as built
+      id: mark
       run: |
         set -euo pipefail
 
+        # The revision that was compiled may be older than the one the checker
+        # dispatched for, so compare against it. When these differ, the newer
+        # commits were never built and the tag stays where it is, which makes
+        # the next check schedule another build.
         LATEST_SHA=$(gh api "repos/$SOURCE_REPO/commits/$SOURCE_BRANCH" \
           --jq '.sha')
 
@@ -170,77 +251,41 @@ jobs:
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Check space usage
-      if: (!cancelled())
-      run: |
-        set -euo pipefail
-        df -hT
-
-    - name: Upload bin directory
-      uses: actions/upload-artifact@main
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
-        retention-days: 14
-
-    - name: Organize files
-      id: organize
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
-      run: |
-        set -euo pipefail
-        cd openwrt/bin/targets/*/*
-        rm -rf packages
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: Upload firmware directory
-      uses: actions/upload-artifact@main
-      if: steps.organize.outputs.status == 'success' && !cancelled()
-      with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
-        retention-days: 14
-
     - name: Generate release tag
       id: tag
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
         set -euo pipefail
         echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        cd openwrt
         {
           echo "Automated build of \`$SOURCE_REPO@$SOURCE_SHA\` (branch \`$SOURCE_BRANCH\`)."
           echo ""
           echo "| item | value |"
           echo "|---|---|"
           echo "| source | $SOURCE_REPO@$SOURCE_SHA |"
-          echo "| kernel | $(sed -n 's/^kernel - \([^ ]*\)$/\1/p' bin/targets/*/*/*.manifest 2>/dev/null | head -n1) |"
-          echo "| packages | $(wc -l < bin/targets/*/*/*.manifest 2>/dev/null | tr -d ' ') |"
-        } > "$GITHUB_WORKSPACE/release.txt"
+          echo "| kernel | $(sed -n 's/^kernel - \([^ ]*\)$/\1/p' firmware/*/*.manifest 2>/dev/null | head -n1) |"
+          echo "| packages | $(cat firmware/*/*.manifest 2>/dev/null | wc -l | tr -d ' ') |"
+        } > release.txt
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
-      uses: softprops/action-gh-release@v1
-      if: steps.tag.outputs.status == 'success' && !cancelled()
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      id: release
+      uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844  # v1
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
-
-    - name: Delete workflow runs
-      uses: GitRML/delete-workflow-runs@main
-      with:
-        retain_days: 1
-        keep_minimum_runs: 3
+        files: firmware/*/*
 
     - name: Remove old Releases
-      uses: dev-drprasad/delete-older-releases@v0.1.0
-      if: steps.compile.outputs.status == 'success' && steps.tag.outputs.status == 'success' && !cancelled()
+      uses: dev-drprasad/delete-older-releases@b1e01bf0c5d758778088864df211686ac382a7e0  # v0.1.0
+      if: steps.release.outcome == 'success' && !cancelled()
       with:
         keep_latest: 3
         #delete_tags: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Delete workflow runs
+      uses: GitRML/delete-workflow-runs@6c7cf4852e73c46502ee79494d99f5b504cacc6d  # main
+      with:
+        retain_days: 1
+        keep_minimum_runs: 3

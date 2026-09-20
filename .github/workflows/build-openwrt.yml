@@ -7,6 +7,11 @@
 # https://github.com/P3TERX/Actions-OpenWrt
 # Description: Build OpenWrt using GitHub Actions
 #
+# The firmware is built from the pinned source repository below (a snapshot of
+# Lean's LEDE). SOURCE_BRANCH is both the revision that gets compiled and the
+# revision the update checker tracks, so "upstream updated" can never disagree
+# with "what was actually built".
+#
 
 name: Build OpenWrt
 
@@ -20,10 +25,9 @@ on:
         default: 'false'
 
 env:
-  REPO_URL: https://github.com/Samre/lede
-  REPO_BRANCH: master
-  UPSTREAM_REPO: coolsnowwolf/lede
-  UPSTREAM_BRANCH: master
+  SOURCE_REPO_URL: https://github.com/Samre/lede
+  SOURCE_REPO: Samre/lede
+  SOURCE_BRANCH: master
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
@@ -33,13 +37,17 @@ env:
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
 
+concurrency:
+  group: openwrt-build
+  cancel-in-progress: false
+
 jobs:
   build:
     permissions:
       contents: write
       actions: write
     runs-on: ubuntu-latest
-    timeout-minutes: 480
+    timeout-minutes: 350
 
     steps:
     - name: Checkout
@@ -63,31 +71,47 @@ jobs:
         sudo timedatectl set-timezone "$TZ"
     - name: Create working directory
       run: |
+        set -euo pipefail
         sudo mkdir -p /workdir
         sudo chown $USER:$USER /workdir
 
     - name: Clone source code
       working-directory: /workdir
       run: |
+        set -euo pipefail
         df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
+        git clone $SOURCE_REPO_URL -b $SOURCE_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: Resolve and pin source revision
+      working-directory: /workdir/openwrt
+      run: |
+        set -euo pipefail
+        SOURCE_SHA=$(git rev-parse HEAD)
+        echo "SOURCE_SHA=$SOURCE_SHA" >> $GITHUB_ENV
+        echo "Building $SOURCE_REPO@$SOURCE_SHA"
 
     - name: Load custom feeds
       run: |
+        set -euo pipefail
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
         chmod +x $DIY_P1_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
     - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
+      run: |
+        set -euo pipefail
+        cd openwrt && ./scripts/feeds update -a
 
     - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
+      run: |
+        set -euo pipefail
+        cd openwrt && ./scripts/feeds install -a
 
     - name: Load custom configuration
       run: |
+        set -euo pipefail
         [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
         chmod +x $DIY_P2_SH
@@ -105,41 +129,52 @@ jobs:
     - name: Download package
       id: package
       run: |
+        set -euo pipefail
         cd openwrt
         make defconfig
         make download -j8 V=s
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
+        find dl -size -1024c -exec ls -l {} \; || true
+        find dl -size -1024c -exec rm -f {} \; || true
 
     - name: Compile the firmware
       id: compile
       run: |
+        set -euo pipefail
         cd openwrt
         echo -e "$(nproc) thread compile"
         make -j$(nproc) || make -j1 || make -j1 V=s
-        echo "::set-output name=status::success"
+        ls bin/targets/*/*/*.img.gz > /dev/null \
+          || { echo "::error::compilation reported success but no image was produced"; exit 1; }
+        echo "status=success" >> $GITHUB_OUTPUT
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+        echo "SOURCE_SHA=$SOURCE_SHA" >> $GITHUB_ENV
 
     - name: Mark upstream as built
       if: steps.compile.outputs.status == 'success' && !cancelled()
       run: |
         set -euo pipefail
 
-        LATEST_SHA=$(gh api "repos/$UPSTREAM_REPO/commits/$UPSTREAM_BRANCH" \
+        LATEST_SHA=$(gh api "repos/$SOURCE_REPO/commits/$SOURCE_BRANCH" \
           --jq '.sha')
+
+        if [ "$LATEST_SHA" != "$SOURCE_SHA" ]; then
+          echo "::warning::$SOURCE_BRANCH advanced to $LATEST_SHA while $SOURCE_SHA was building; keeping the tracker at the built revision so the new commits are picked up by the next check"
+        fi
 
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -f -a upstream-tracker -m "$LATEST_SHA"
+        git tag -f -a upstream-tracker -m "$SOURCE_SHA"
         git push -f origin upstream-tracker
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Check space usage
       if: (!cancelled())
-      run: df -hT
+      run: |
+        set -euo pipefail
+        df -hT
 
     - name: Upload bin directory
       uses: actions/upload-artifact@main
@@ -147,15 +182,17 @@ jobs:
       with:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: openwrt/bin
+        retention-days: 14
 
     - name: Organize files
       id: organize
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
       run: |
+        set -euo pipefail
         cd openwrt/bin/targets/*/*
         rm -rf packages
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "::set-output name=status::success"
+        echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware directory
       uses: actions/upload-artifact@main
@@ -163,16 +200,25 @@ jobs:
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
+        retention-days: 14
 
     - name: Generate release tag
       id: tag
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true' && !cancelled()
       run: |
-        echo "::set-output name=release_tag::$(date +"%Y.%m.%d-%H%M")"
-        touch release.txt
-        [ $UPLOAD_COWTRANSFER = true ] && echo "🔗 [Cowtransfer](${{ steps.cowtransfer.outputs.url }})" >> release.txt
-        [ $UPLOAD_WETRANSFER = true ] && echo "🔗 [WeTransfer](${{ steps.wetransfer.outputs.url }})" >> release.txt
-        echo "::set-output name=status::success"
+        set -euo pipefail
+        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
+        cd openwrt
+        {
+          echo "Automated build of \`$SOURCE_REPO@$SOURCE_SHA\` (branch \`$SOURCE_BRANCH\`)."
+          echo ""
+          echo "| item | value |"
+          echo "|---|---|"
+          echo "| source | $SOURCE_REPO@$SOURCE_SHA |"
+          echo "| kernel | $(sed -n 's/^kernel - \([^ ]*\)$/\1/p' bin/targets/*/*/*.manifest 2>/dev/null | head -n1) |"
+          echo "| packages | $(wc -l < bin/targets/*/*/*.manifest 2>/dev/null | tr -d ' ') |"
+        } > "$GITHUB_WORKSPACE/release.txt"
+        echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
       uses: softprops/action-gh-release@v1
@@ -192,7 +238,7 @@ jobs:
 
     - name: Remove old Releases
       uses: dev-drprasad/delete-older-releases@v0.1.0
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      if: steps.compile.outputs.status == 'success' && steps.tag.outputs.status == 'success' && !cancelled()
       with:
         keep_latest: 3
         #delete_tags: true

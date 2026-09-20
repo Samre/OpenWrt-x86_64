@@ -6,7 +6,11 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
 # File: .github/workflows/update-checker.yml
-# Description: Checks upstream for new commits and triggers a build
+# Description: Checks the build source for new commits and triggers a build
+#
+# The tracked repository is exactly the one build-openwrt.yml compiles
+# (Samre/lede). Tracking a different repository would let the tracker claim
+# "up to date" while an arbitrarily old revision gets built.
 #
 
 name: Update Checker
@@ -17,13 +21,15 @@ on:
     - cron: '0 19 * * 0'  # Weekly, Sunday 19:00 UTC (Monday 03:00 Beijing)
 
 env:
-  UPSTREAM_REPO: coolsnowwolf/lede
-  UPSTREAM_BRANCH: master
+  SOURCE_REPO: Samre/lede
+  SOURCE_BRANCH: master
 
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: write
 
     steps:
     - name: Checkout
@@ -32,12 +38,12 @@ jobs:
         fetch-depth: 0
         persist-credentials: true
 
-    - name: Check for upstream updates
+    - name: Check for source updates
       id: check
       run: |
         set -euo pipefail
 
-        LATEST_SHA=$(gh api "repos/$UPSTREAM_REPO/commits/$UPSTREAM_BRANCH" \
+        LATEST_SHA=$(gh api "repos/$SOURCE_REPO/commits/$SOURCE_BRANCH" \
           --jq '.sha')
         echo "latest_sha=$LATEST_SHA" >> $GITHUB_OUTPUT
 
@@ -61,7 +67,7 @@ jobs:
         set -euo pipefail
 
         RUNNING=$(gh run list --workflow build-openwrt.yml --status in_progress \
-          --limit 1 --json databaseId --jq '.[0].databaseId // empty' || true)
+          --status queued --limit 1 --json databaseId --jq '.[0].databaseId // empty' || true)
 
         if [ -n "$RUNNING" ]; then
           echo "skip=true" >> $GITHUB_OUTPUT

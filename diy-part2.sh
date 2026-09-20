@@ -16,10 +16,6 @@
 
 set -euo pipefail
 
-# Preprocessor marker inserted into the shortcut-fe sources; also used to keep
-# the insertion idempotent when the script runs more than once.
-SFE_SUPPORT_IPV6_MARK="SFE_SUPPORT_IPV6 1"
-
 # --- Default LAN IP ---------------------------------------------------------
 # The firmware ships 192.168.216.10 instead of the upstream 192.168.1.1.
 # WARNING: config_generate only creates /etc/config/network when no network
@@ -81,26 +77,11 @@ if [ ! -d "$SHORTCUT_SRC" ]; then
   exit 1
 fi
 
-# IPv6 hooks: shortcut-fe/Makefile only passes SFE_SUPPORT_IPV6=y as a make
-# variable to kbuild, so it never becomes a C preprocessor macro. Define it in
-# the sources to enable the IPv6 hooks. The guard keeps the script idempotent.
-for src in sfe_ipv6.c sfe_cm.c; do
-  file="$SHORTCUT_SRC/$src"
-  [ -f "$file" ] || { echo "::error::missing $file"; exit 1; }
+# The container_of/del_timer_sync rewrites below apply to every source file in
+# this directory that uses them, so check they are all present first.
+for src in sfe_ipv4.c sfe_ipv6.c sfe_cm.c; do
+  [ -f "$SHORTCUT_SRC/$src" ] || { echo "::error::missing $SHORTCUT_SRC/$src"; exit 1; }
 done
-
-if ! grep -q "$SFE_SUPPORT_IPV6_MARK" "$SHORTCUT_SRC/sfe_ipv6.c"; then
-  sed -i '/^#include "sfe_cm.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_ipv6.c"
-  echo "  sfe_ipv6.c: SFE_SUPPORT_IPV6 guard inserted"
-fi
-if ! grep -q "$SFE_SUPPORT_IPV6_MARK" "$SHORTCUT_SRC/sfe_cm.c"; then
-  sed -i '/^#include "sfe.h"/i #ifndef SFE_SUPPORT_IPV6\n#define SFE_SUPPORT_IPV6 1\n#endif' "$SHORTCUT_SRC/sfe_cm.c"
-  echo "  sfe_cm.c: SFE_SUPPORT_IPV6 guard inserted"
-fi
-grep -q "$SFE_SUPPORT_IPV6_MARK" "$SHORTCUT_SRC/sfe_ipv6.c" \
-  || { echo "::error::SFE_SUPPORT_IPV6 guard missing from sfe_ipv6.c"; exit 1; }
-grep -q "$SFE_SUPPORT_IPV6_MARK" "$SHORTCUT_SRC/sfe_cm.c" \
-  || { echo "::error::SFE_SUPPORT_IPV6 guard missing from sfe_cm.c"; exit 1; }
 
 # from_timer(si, tl, timer) -> container_of(tl, struct sfe_ipvN, timer)
 # del_timer_sync(&si->timer) -> timer_delete_sync(&si->timer)
@@ -138,24 +119,35 @@ grep -qE '\btimer_delete_sync[[:space:]]*\(' "$SHORTCUT_SRC/sfe_ipv4.c" \
 grep -qE '\btimer_delete_sync[[:space:]]*\(' "$SHORTCUT_SRC/sfe_ipv6.c" \
   || { echo "::error::timer_delete_sync replacement missing from sfe_ipv6.c"; exit 1; }
 
-# The 5.15-only branch in sfe_cm.c reads the global nf_ct_tcp_no_window_check,
-# which Linux 6.18 no longer defines (it moved to the per-netns nf_tcp_net and
-# is read through tn->tcp_no_window_check). The pinned source already has the
-# version guard in a form sed cannot match reliably, and on a 6.12 fallback
-# kernel the #else branch is compiled and would fail to build. Neutralize the
-# dead branch explicitly instead of relying on a brittle text substitution.
+# sfe_cm.c reads the "no window check" conntrack setting. Linux 6.18 removed it
+# from struct nf_tcp_net entirely, while the source still guards the read with
+# `>= 5.15` and so takes that branch:
+#     sfe_cm.c:514: error: 'struct nf_tcp_net' has no member named 'tcp_no_window_check'
+# Drop the removed member and leave the equivalent tcp_be_liberal test, which
+# still determines SFE_CREATE_FLAG_NO_SEQ_CHECK on every supported kernel.
 SFE_CM="$SHORTCUT_SRC/sfe_cm.c"
-if grep -qF 'nf_ct_tcp_no_window_check' "$SFE_CM"; then
+if grep -qF 'tcp_no_window_check' "$SFE_CM"; then
   before=$(md5sum "$SFE_CM" | cut -d' ' -f1)
-  sed -i 's/nf_ct_tcp_no_window_check/0/g' "$SFE_CM"
+  sed -i \
+    -e '/^[[:space:]]*struct net \*net=NULL;$/d' \
+    -e '/^[[:space:]]*struct nf_tcp_net \*tn=NULL;$/d' \
+    -e '\|^#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 15, 0)$|,\|^#endif$|c\
+if ((ct->proto.tcp.seen[0].flags \& IP_CT_TCP_FLAG_BE_LIBERAL)' \
+    "$SFE_CM"
   after=$(md5sum "$SFE_CM" | cut -d' ' -f1)
   [ "$before" != "$after" ] \
-    || { echo "::error::nf_ct_tcp_no_window_check neutralization changed nothing in ${SFE_CM}"; exit 1; }
-  echo "  sfe_cm.c: 5.15-only global neutralized (branch is inactive on 6.18)"
+    || { echo "::error::6.18 nf_tcp_net patch changed nothing in ${SFE_CM}"; exit 1; }
+  echo "  sfe_cm.c: dropped the nf_tcp_net->tcp_no_window_check read (removed in 6.18)"
 fi
 
-# Confirm the resulting source still contains the version-checked 6.18 path.
-grep -q 'tn->tcp_no_window_check' "$SFE_CM" \
-  || echo "::warning::${SFE_CM} no longer references tn->tcp_no_window_check — recheck the 6.18 path"
+# Assert the result compiles on the 6.18 header: no reference to the removed
+# member may survive in either branch, and the remaining condition must still
+# decide SFE_CREATE_FLAG_NO_SEQ_CHECK.
+if grep -qF 'tcp_no_window_check' "$SFE_CM"; then
+  echo "::error::${SFE_CM} still references tcp_no_window_check, which Linux 6.18 does not provide"
+  exit 1
+fi
+grep -qF 'if ((ct->proto.tcp.seen[0].flags & IP_CT_TCP_FLAG_BE_LIBERAL)' "$SFE_CM" \
+  || { echo "::error::liberal-flag condition missing from ${SFE_CM}"; exit 1; }
 
 echo "All DIY part 2 edits verified."

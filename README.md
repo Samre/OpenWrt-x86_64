@@ -3,16 +3,17 @@
 [![Release](https://img.shields.io/github/v/release/Samre/OpenWrt-x86_64?display_name=tag)](https://github.com/Samre/OpenWrt-x86_64/releases/latest)
 [![Build OpenWrt](https://github.com/Samre/OpenWrt-x86_64/actions/workflows/build-openwrt.yml/badge.svg)](https://github.com/Samre/OpenWrt-x86_64/actions/workflows/build-openwrt.yml)
 
-基于 [Lean's LEDE](https://github.com/coolsnowwolf/lede) 源码、使用 GitHub Actions 自动编译的 **x86_64 软路由固件**。上游有新提交时按计划自动构建，编译成功后自动发布到 [Releases](https://github.com/Samre/OpenWrt-x86_64/releases)。
+基于 [Lean's LEDE](https://github.com/coolsnowwolf/lede) 源码、使用 GitHub Actions 自动编译的 **x86_64 软路由固件**。编译源固定为 [Samre/lede](https://github.com/Samre/lede) 快照仓库，Update Checker 按计划检查**该快照**是否有新提交，有则自动构建，编译成功后自动发布到 [Releases](https://github.com/Samre/OpenWrt-x86_64/releases)。
 
 ## 固件信息
 
 | 项目 | 值 |
 |---|---|
 | 目标平台 | x86_64 generic |
-| 源码 | [Samre/lede](https://github.com/Samre/lede)（Lean's LEDE master 分支） |
-| 默认后台地址 | `192.168.216.10` |
-| 默认账号 | `root`（默认无密码，首次登录请自行设置） |
+| 源码 | [Samre/lede](https://github.com/Samre/lede) master（Lean's LEDE 快照，非实时跟进 coolsnowwolf/lede） |
+| 源码版本 | 见 Release 说明中的 `Samre/lede@<commit>` 或固件内 `/etc/openwrt_release` |
+| 默认后台地址 | `192.168.216.10`（刷写后请确认；`config_generate` 仅在无网络配置时才生成该地址） |
+| 默认账号 | `root`。`diy-part2.sh` 会移除上游写入的默认密码哈希，正常情况首次登录无密码，请登录后立即设置 |
 | 防火墙架构 | firewall3 / iptables（注意：不支持依赖 firewall4/nftables 的插件） |
 | 虚拟化优化 | 内置 `qemu-ga`（PVE/KVM 等虚拟机环境即装即用） |
 
@@ -58,18 +59,22 @@
 
 | 工作流 | 说明 |
 |---|---|
-| `build-openwrt.yml` | 主编译工作流。手动触发（Actions 页面 Run workflow 或 `gh workflow run build-openwrt.yml`），或被 Update Checker 唤起。编译成功自动发布 Release，失败不发版 |
-| `update-checker.yml` | 每周一凌晨 3 点（北京时间）检查上游 LEDE 是否有新提交，有则自动触发编译；支持手动触发；编译已在运行时自动跳过 |
+| `build-openwrt.yml` | 主编译工作流。手动触发（Actions 页面 Run workflow 或 `gh workflow run build-openwrt.yml`），或被 Update Checker 唤起。编译成功自动发布 Release，失败不发版。同一时间只跑一个构建（`concurrency` 组串行化），避免重叠运行互相覆盖产物 |
+| `update-checker.yml` | 每周一凌晨 3 点（北京时间）检查**编译源快照**是否有新提交，有则自动触发编译；支持手动触发；已有构建在运行或排队时自动跳过 |
 
-**失败重试机制**：上游 SHA 通过 `upstream-tracker` 标签记录，仅在编译成功后更新。构建失败不会更新标签，下一个检查点会自动重试。
+**失败重试机制**：快照源的 SHA 通过 `upstream-tracker` 标签记录，记录的是**本次实际编译的提交**，仅在编译成功后更新。构建失败不会更新标签，下一个检查点会自动重试。若编译期间快照源又有新提交，标签停在已编译的 SHA，新提交会在下一个检查点被重新构建。
 
 ## 自定义
 
 1. **调整插件**：编辑 `.config`（`CONFIG_PACKAGE_xxx=y`）。注意核对名称是否存在于已配置的 feed 中，透明代理类插件同时只能运行一个；
 2. **添加第三方源**：编辑 `diy-part1.sh`（在 feeds 更新前执行），源码里预置了 iStore、kenzok8/openwrt-packages、kenzok8/small 三个常用源；
-3. **构建期定制**：编辑 `diy-part2.sh`（feeds 更新后执行），当前包含：修改默认 IP、清除 root 密码、shortcut-fe Linux 6.18+ 内核兼容补丁。
+3. **构建期定制**：编辑 `diy-part2.sh`（feeds 更新后执行），当前包含：修改默认 IP、清除 root 默认密码哈希、shortcut-fe 内核兼容补丁。
 
-修改后推送并在 Actions 页手动触发即可；或等待每周自动检查。
+这两个 DIY 脚本都是 fail-fast 的：定制的目标文件不存在、替换没有命中，或补丁没有真正生效时，构建会直接失败并打印 `::error::`，不会静默产出一个没打补丁的固件。
+
+修改后推送到仓库并在 Actions 页手动触发即可；或等待每周自动检查。
+
+> 注意：`.config` 里 `CONFIG_TARGET_KERNEL_PARTSIZE=2048`、`CONFIG_TARGET_ROOTFS_PARTSIZE=4096`（单位 MiB）会生成约 6 GiB 的磁盘镜像，刷写前请确认目标磁盘足够大。
 
 ## 致谢
 

@@ -72,9 +72,13 @@
 
 这两个 DIY 脚本都是 fail-fast 的：定制的目标文件不存在、替换没有命中，或补丁没有真正生效时，构建会直接失败并打印 `::error::`，不会静默产出一个没打补丁的固件。
 
+构建前还有一道配置对账：`make defconfig` 之后会逐个核对 `.config` 里被选中的符号是否仍然存在，被静默丢弃就报错退出——避免"配置里写了、固件里没有"。
+
+另外，构建 job 只持有只读仓库权限，发布与打标签在独立的 publish job 中完成；第三方 action 全部固定到 commit SHA，不再跟随 `main` 分支。
+
 修改后推送到仓库并在 Actions 页手动触发即可；或等待每周自动检查。
 
-> 注意：`.config` 里 `CONFIG_TARGET_KERNEL_PARTSIZE=2048`、`CONFIG_TARGET_ROOTFS_PARTSIZE=4096`（单位 MiB）会生成约 6 GiB 的磁盘镜像，刷写前请确认目标磁盘足够大。
+> 注意：`.config` 里的 `CONFIG_TARGET_KERNEL_PARTSIZE=64`、`CONFIG_TARGET_ROOTFS_PARTSIZE=1024`（单位 MiB）决定镜像内的分区大小，压缩包约 300 MB，解压写入需要 ≥1.1 GiB 的磁盘空间。这两个值同时决定系统分区容量，上调可留出更多 overlay 空间，下调则影响后续固件升级时能否原地写入。
 
 ## 致谢
 

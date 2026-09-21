@@ -107,11 +107,13 @@ jobs:
         # ccache is deliberately not cached: CONFIG_CCACHE is not a Kconfig
         # symbol in this tree, so enabling it would make `make defconfig`
         # rewrite .config and trip the reconciliation check below.
+        # The v2 prefix abandons any entry saved by a run that pruned files out
+        # of dl/go-mod-cache.
         path: /workdir/openwrt/dl
-        key: openwrt-dl-${{ env.SOURCE_SHA }}-${{ hashFiles('.config', 'diy-part1.sh', 'diy-part2.sh') }}
+        key: openwrt-dl-v2-${{ env.SOURCE_SHA }}-${{ hashFiles('.config', 'diy-part1.sh', 'diy-part2.sh') }}
         restore-keys: |
-          openwrt-dl-${{ env.SOURCE_SHA }}-
-          openwrt-dl-
+          openwrt-dl-v2-${{ env.SOURCE_SHA }}-
+          openwrt-dl-v2-
 
     - name: Load custom feeds
       run: |
@@ -174,8 +176,14 @@ jobs:
         set -euo pipefail
         cd openwrt
         make download -j8 V=s
-        find dl -size -1024c -exec ls -l {} \; || true
-        find dl -size -1024c -exec rm -f {} \; || true
+        # Truncated downloads leave tiny placeholder files behind, so the
+        # template removes anything under 1KB. That rule must never reach
+        # dl/go-mod-cache: the Go module cache legitimately holds many tiny
+        # files (module .mod/.info/.ziphash metadata and small .go sources) and
+        # deleting them breaks module resolution with errors such as
+        # "no required module provides package github.com/.../internal/...".
+        find dl -path dl/go-mod-cache -prune -o -type f -size -1024c -exec ls -l {} \; || true
+        find dl -path dl/go-mod-cache -prune -o -type f -size -1024c -exec rm -f {} \; || true
 
     - name: Compile the firmware
       id: compile

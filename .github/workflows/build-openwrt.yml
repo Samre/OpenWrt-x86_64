@@ -39,6 +39,13 @@ env:
   DIY_P2_SH: diy-part2.sh
   UPLOAD_FIRMWARE: true
   TZ: Asia/Shanghai
+  # The Go-based feed packages (adguardhome, sing-box, ...) fail with
+  # "no required module provides package ..." when a module cannot be fetched,
+  # which is what this repository diagnosed as the root cause in cc997d2:
+  # proxy.golang.org is unreliable from GitHub runners. It has to live here, in
+  # the job environment, because a GOPROXY exported by a step script does not
+  # survive into the later compile step.
+  GOPROXY: https://goproxy.cn,https://proxy.golang.org,direct
 
 concurrency:
   group: openwrt-build
@@ -176,14 +183,14 @@ jobs:
         set -euo pipefail
         cd openwrt
         make download -j8 V=s
-        # Truncated downloads leave tiny placeholder files behind, so the
-        # template removes anything under 1KB. That rule must never reach
-        # dl/go-mod-cache: the Go module cache legitimately holds many tiny
-        # files (module .mod/.info/.ziphash metadata and small .go sources) and
-        # deleting them breaks module resolution with errors such as
-        # "no required module provides package github.com/.../internal/...".
-        find dl -path dl/go-mod-cache -prune -o -type f -size -1024c -exec ls -l {} \; || true
-        find dl -path dl/go-mod-cache -prune -o -type f -size -1024c -exec rm -f {} \; || true
+        # The template used to delete every file under 1KB in dl/ to clean up
+        # truncated downloads. That is unsafe: dl/go-mod-cache holds many
+        # legitimately tiny files (module .mod/.info/.ziphash metadata and
+        # small .go sources) and removing them broke module resolution with
+        # "no required module provides package .../internal/..." errors — the
+        # same failure this repository already diagnosed in dbfa349. It is
+        # dropped rather than narrowed: `make download` reports failures and
+        # OpenWrt verifies PKG_HASH, so a bad download is already caught.
 
     - name: Compile the firmware
       id: compile

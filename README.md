@@ -145,6 +145,8 @@ bash tools/check-picoclaw.sh
 
 另外，构建 job 只持有只读仓库权限，发布与打标签在独立的 publish job 中完成；第三方 action 全部固定到 commit SHA，不再跟随 `main` 分支。自建包同样遵循这一原则：上游源码固定到具体 commit SHA，而非跟踪 `main`。
 
+> **naiveproxy 临时补丁**：`diy-part2.sh` 会把 `feeds/small` 里 naiveproxy 的版本从 `154.0.8037.49-1` 改写为上游已发布的 `-2`，并同步更新 x86_64 的 `PKG_HASH`（该哈希由实际下载文件实测得出，非猜测）。原因是上游在发布 `-2` 的同时删除了 `-1`，导致 feed 里钉住的下载地址变成 404，`make world` 会在编译到后续软件包之前直接中止。此补丁只改 x86_64 一个分支，且会在替换前断言目标哈希在文件中唯一，避免误改其他架构。**待 kenzok8/small 自行更新到 `-2` 后即可删除该段**（脚本已做幂等判断，届时会自动跳过）。
+
 修改后推送到仓库并在 Actions 页手动触发即可；或等待每周自动检查。
 
 > 注意：`.config` 里的 `CONFIG_TARGET_KERNEL_PARTSIZE=64`、`CONFIG_TARGET_ROOTFS_PARTSIZE=1024`（单位 MiB）决定镜像内的分区大小，压缩包约 300 MB，解压写入需要 ≥1.1 GiB 的磁盘空间。这两个值同时决定系统分区容量，上调可留出更多 overlay 空间，下调则影响后续固件升级时能否原地写入。

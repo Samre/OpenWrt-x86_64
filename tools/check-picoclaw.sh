@@ -108,6 +108,25 @@ grep -q 'ONBOARD_MARKER' "$PICOCLAW_INIT" \
 	&& pass "onboard runs behind a one-shot marker" \
 	|| bad "onboard has no one-shot guard: it would re-run every boot"
 
+head_ "Kconfig symbol matches PKG_NAME"
+# The workflow reconciles .config against `make defconfig` and fails the build
+# for any selected symbol whose package is not present at that moment, so the
+# symbol diy-part2.sh appends must be exactly CONFIG_PACKAGE_<PKG_NAME>.
+PKG_NAME_VALUE=$(grep -E '^PKG_NAME:=' "$PICOCLAW_MAKEFILE" | cut -d= -f2)
+if [ "$PKG_NAME_VALUE" = "picoclaw" ]; then
+	pass "PKG_NAME=picoclaw, so CONFIG_PACKAGE_picoclaw is the right symbol"
+else
+	bad "PKG_NAME='$PKG_NAME_VALUE' would need CONFIG_PACKAGE_$PKG_NAME_VALUE, not CONFIG_PACKAGE_picoclaw"
+fi
+grep -q 'CONFIG_PACKAGE_picoclaw=y' "$ROOT/diy-part2.sh" \
+	&& pass "diy-part2.sh selects CONFIG_PACKAGE_picoclaw=y" \
+	|| bad "diy-part2.sh does not select CONFIG_PACKAGE_picoclaw=y"
+if grep -qE '^CONFIG_PACKAGE_picoclaw=y$' "$ROOT/.config"; then
+	bad ".config selects the symbol too; it must be added after the package is staged, not committed"
+else
+	pass ".config does not select it (correct: package/ is staged later in the same step)"
+fi
+
 head_ "shipped reference JSON parses"
 # Note: `command -v python3` is not enough on Windows, where the Microsoft
 # Store ships a python3.exe stub that resolves but does not run. Probe it.

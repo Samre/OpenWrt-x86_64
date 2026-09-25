@@ -328,4 +328,70 @@ grep -q 'PICOCLAW_HOME' "$PICOCLAW_INIT" \
   || { echo "::error::$PICOCLAW_INIT does not set PICOCLAW_HOME, so the config path would not resolve"; exit 1; }
 echo "  picoclaw: init script sets PICOCLAW_HOME and exports no credentials"
 
+# --- naiveproxy: pinned release was deleted upstream -------------------------
+# feeds/small pins PKG_REAL_VERSION:=154.0.8037.49-1. Upstream published
+# 154.0.8037.49-2 on 2026-09-25 and removed the -1 release in the same
+# operation, so the pinned archive is a 404:
+#
+#   ERROR: package/feeds/small/naiveproxy failed to build.
+#   curl: (22) The requested URL returned error: 404
+#   .../download/v154.0.8037.49-1/naiveproxy-v154.0.8037.49-1-openwrt-x86_64.tar.xz
+#
+# This is unrelated to any change in this repository, but it aborts `make
+# world` before later packages are reached, so it has to be worked around to
+# get a build at all. Only the x86_64 hash is touched: that is the only
+# architecture this repository builds, and the other 20 branches in the
+# Makefile are left exactly as the feed ships them.
+#
+# Remove this block once kenzok8/small moves to -2 on its own.
+NAIVEPROXY_MK="feeds/small/naiveproxy/Makefile"
+NAIVEPROXY_OLD_VERSION="154.0.8037.49-1"
+NAIVEPROXY_NEW_VERSION="154.0.8037.49-2"
+NAIVEPROXY_OLD_HASH="55a10e6ca08696f9b606e1b3cb1a65aba72253756c5e1769d78edd78d4a1c6ab"
+NAIVEPROXY_NEW_HASH="25ac92b86474fc62ed0e5008d7009f935115b9ae8a072f1fbafc92790ea283ce"
+
+if [ -f "$NAIVEPROXY_MK" ]; then
+  if grep -qF "$NAIVEPROXY_NEW_VERSION" "$NAIVEPROXY_MK"; then
+    echo "  naiveproxy: already on ${NAIVEPROXY_NEW_VERSION} (feed was updated upstream); no patch needed"
+  elif grep -qF "PKG_REAL_VERSION:=${NAIVEPROXY_OLD_VERSION}" "$NAIVEPROXY_MK"; then
+    # The substitutions below are unconditional sed replacements, so assert
+    # first that each target occurs exactly once. If upstream ever reuses the
+    # same hash for a second architecture, a global replace would silently
+    # rewrite that branch too and produce a checksum failure at download time
+    # on a package unrelated to naiveproxy.
+    old_hash_count=$(grep -cF "$NAIVEPROXY_OLD_HASH" "$NAIVEPROXY_MK")
+    [ "$old_hash_count" -eq 1 ] \
+      || { echo "::error::expected exactly one x86_64 naiveproxy hash ${NAIVEPROXY_OLD_HASH}, found ${old_hash_count}; refusing a global replace"; exit 1; }
+    old_version_count=$(grep -cF "PKG_REAL_VERSION:=${NAIVEPROXY_OLD_VERSION}" "$NAIVEPROXY_MK")
+    [ "$old_version_count" -eq 1 ] \
+      || { echo "::error::expected exactly one PKG_REAL_VERSION line, found ${old_version_count}"; exit 1; }
+
+    # Retarget the release and the matching x86_64 archive hash together; the
+    # two must move as a pair or PKG_HASH verification fails on download.
+    sed -i \
+      -e "s/^PKG_REAL_VERSION:=${NAIVEPROXY_OLD_VERSION}\$/PKG_REAL_VERSION:=${NAIVEPROXY_NEW_VERSION}/" \
+      -e "s/${NAIVEPROXY_OLD_HASH}/${NAIVEPROXY_NEW_HASH}/" \
+      "$NAIVEPROXY_MK"
+
+    grep -qF "PKG_REAL_VERSION:=${NAIVEPROXY_NEW_VERSION}" "$NAIVEPROXY_MK" \
+      || { echo "::error::naiveproxy version substitution did not apply to ${NAIVEPROXY_MK}"; exit 1; }
+    if grep -qF "$NAIVEPROXY_OLD_HASH" "$NAIVEPROXY_MK"; then
+      echo "::error::naiveproxy still carries the deleted archive hash ${NAIVEPROXY_OLD_HASH}"
+      exit 1
+    fi
+    new_hash_count=$(grep -cF "$NAIVEPROXY_NEW_HASH" "$NAIVEPROXY_MK")
+    [ "$new_hash_count" -eq 1 ] \
+      || { echo "::error::expected exactly one updated naiveproxy hash, found ${new_hash_count}"; exit 1; }
+    # Guard against a future feed layout change moving the hash to another
+    # architecture branch while leaving this check silently satisfied.
+    sed -n '/x86_64/,+1p' "$NAIVEPROXY_MK" | grep -qF "$NAIVEPROXY_NEW_HASH" \
+      || { echo "::error::the updated hash is not inside the x86_64 branch of ${NAIVEPROXY_MK}"; exit 1; }
+    echo "  naiveproxy: ${NAIVEPROXY_OLD_VERSION} -> ${NAIVEPROXY_NEW_VERSION} (release deleted upstream, 404)"
+  else
+    echo "::warning::naiveproxy is pinned to neither ${NAIVEPROXY_OLD_VERSION} nor ${NAIVEPROXY_NEW_VERSION}; the feed changed shape, re-check this block"
+  fi
+else
+  echo "  naiveproxy: feed package not present, skipping"
+fi
+
 echo "All DIY part 2 edits verified."

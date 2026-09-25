@@ -1,0 +1,66 @@
+#!/bin/sh
+#
+# SPDX-License-Identifier: MIT
+#
+# First-boot initialisation for PicoClaw (OpenWrt /etc/uci-defaults).
+#
+# Runs exactly once: OpenWrt deletes the script after it exits 0.
+#
+# What this does NOT do: write an API key, a bot token or any channel
+# credential. Those belong to the operator and must never be baked into a
+# firmware image or a repository. Populate them after flashing:
+#
+#   vi /etc/picoclaw/config.json          # model_list[].api_key
+#   /etc/init.d/picoclaw restart
+#
+# Reason for generating the config here instead of shipping a hand-written
+# template: upstream's DefaultConfig() is the single source of truth for the
+# schema. A copied template silently rots when upstream adds or renames
+# fields - which is exactly how the third-party package ended up shipping a
+# config.json missing every channel added after v0.1.x.
+
+[ -f /lib/functions.sh ] && . /lib/functions.sh
+
+CONFDIR=/etc/picoclaw
+CONF=$CONFDIR/config.json
+PROG=/usr/bin/picoclaw
+
+# UCI may already create this directory, but be explicit and make the
+# permissions right before any secret is written into it.
+mkdir -p "$CONFDIR"
+chmod 0700 "$CONFDIR"
+
+# Generate the default configuration once. A pre-existing config (for example
+# restored from a backup) is never overwritten.
+if [ ! -s "$CONF" ] && [ -x "$PROG" ]; then
+	if PICOCLAW_HOME="$CONFDIR" "$PROG" onboard >/dev/null 2>&1; then
+		logger -t picoclaw -p daemon.notice "default configuration created at $CONF"
+	else
+		logger -t picoclaw -p daemon.err \
+			"failed to generate $CONF; the agent will not start until it exists"
+	fi
+
+	# Harden it before it can hold a key. `onboard` writes with the default
+	# umask, which on OpenWrt leaves it world-readable.
+	[ -f "$CONF" ] && chmod 0600 "$CONF"
+fi
+
+# /etc/init.d/picoclaw enable is handled by the package's default enable
+# hook; only start when the operator has not disabled the service.
+if [ -x /etc/init.d/picoclaw ]; then
+	/etc/init.d/picoclaw enable 2>/dev/null
+fi
+
+# Announce the state so the operator knows whether a key is still needed.
+if [ -s "$CONF" ]; then
+	if grep -q '"api_key"[[:space:]]*:[[:space:]]*""' "$CONF" 2>/dev/null; then
+		logger -t picoclaw -p daemon.warn \
+			"PicoClaw is installed but no API key is configured yet: edit $CONF, then /etc/init.d/picoclaw restart"
+	fi
+fi
+
+# Drop the stale LuCI index cache so the new service shows up without a reboot.
+rm -f /tmp/luci-indexcache 2>/dev/null
+rm -rf /tmp/luci-modulecache 2>/dev/null
+
+exit 0

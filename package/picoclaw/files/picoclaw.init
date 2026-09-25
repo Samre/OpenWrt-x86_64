@@ -1,0 +1,144 @@
+#!/bin/sh /etc/rc.common
+#
+# SPDX-License-Identifier: MIT
+#
+# procd init script for PicoClaw.
+#
+# Design notes (these are deliberate, not incidental):
+#
+#  * PICOCLAW_HOME is the only redirection mechanism used. Upstream honours it
+#    natively in pkg/config/envkeys.go, so no source patch and no
+#    /.picoclaw symlink workaround is needed.
+#
+#  * Secrets are NOT exported here. API keys and bot tokens live in
+#    /etc/picoclaw/config.json (0600). Exporting them would publish them via
+#    /proc/<pid>/environ, which is world-readable on an unpatched OpenWrt.
+#
+#  * `picoclaw onboard` runs exactly once, guarded by a marker file, and never
+#    while a config already exists. The third-party init script guarded on
+#    $workspace/AGENTS.md, but upstream's copyEmbeddedToTarget() explicitly
+#    skips AGENTS.md, so that sentinel never appears and onboard re-ran on
+#    every boot - each time rewriting config.json from defaults.
+#
+#  * The workspace lives on persistent storage (/etc/picoclaw/workspace by
+#    default, overridable to an external disk) rather than being regenerated
+#    into tmpfs on every start.
+
+START=99
+STOP=10
+USE_PROCD=1
+NAME=picoclaw
+PROG=/usr/bin/picoclaw
+
+CONFDIR=/etc/picoclaw
+CONF=$CONFDIR/config.json
+ONBOARD_MARKER=$CONFDIR/.onboard-done
+DEFAULT_WORKSPACE=$CONFDIR/workspace
+LOG=/var/log/picoclaw.log
+LOG_MAX_KB=256
+
+# Marker used to tell "workspace already initialised" from "needs onboard".
+# Deliberately NOT AGENTS.md: upstream's copyEmbeddedToTarget() skips that file
+# (and IDENTITY.md), so it can never be used as a completion sentinel.
+WORKSPACE_MARKER="SOUL.md"
+
+# Read one UCI value and export it, only when it is non-empty.
+export_uci() {
+	local value
+	config_get value "$1" "$2" "$3"
+	[ -n "$value" ] || return 0
+	export "$4=$value"
+}
+
+# Fail loudly instead of starting a half-configured agent.
+require_config() {
+	if [ ! -s "$CONF" ]; then
+		logger -t picoclaw -p daemon.err \
+			"$CONF is missing; the agent cannot start. Reinstall the package or run: PICOCLAW_HOME=$CONFDIR $PROG onboard"
+		return 1
+	fi
+	return 0
+}
+
+workspace_present() {
+	[ -f "$1/$WORKSPACE_MARKER" ]
+}
+
+start_instance() {
+	local cfg="$1" enabled delay logger_on workspace restrict heartbeat_on heartbeat_interval
+
+	config_get_bool enabled "$cfg" enabled 1
+	[ "$enabled" = "1" ] || return 1
+
+	config_get delay "$cfg" delay 0
+	config_get_bool logger_on "$cfg" logger 1
+
+	# PICOCLAW_HOME must be set before anything can resolve $CONF.
+	export PICOCLAW_HOME="$CONFDIR"
+
+	export_uci gateway host '127.0.0.1' PICOCLAW_GATEWAY_HOST
+	export_uci gateway port '18790' PICOCLAW_GATEWAY_PORT
+	export_uci agent workspace "$DEFAULT_WORKSPACE" PICOCLAW_AGENTS_DEFAULTS_WORKSPACE
+	export_uci agent restrict_to_workspace '1' PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE
+	export_uci heartbeat enabled '0' PICOCLAW_HEARTBEAT_ENABLED
+	export_uci heartbeat interval '30' PICOCLAW_HEARTBEAT_INTERVAL
+	# The runtime knobs above are not all struct-tagged fields; make sure the
+	# gateway and sandbox settings cannot be lost if upstream drops a tag.
+	export PICOCLAW_CONFIG="$CONF"
+
+	workspace="${PICOCLAW_AGENTS_DEFAULTS_WORKSPACE:-$DEFAULT_WORKSPACE}"
+
+	require_config || return 1
+
+	# Create the workspace once. The guard is a marker we create ourselves,
+	# because upstream never writes AGENTS.md into it (see header note).
+	if [ ! -d "$workspace" ]; then
+		mkdir -p "$workspace" || {
+			logger -t picoclaw -p daemon.err "cannot create workspace $workspace"
+			return 1
+		}
+	fi
+
+	if [ ! -f "$ONBOARD_MARKER" ] && ! workspace_present "$workspace"; then
+		logger -t picoclaw -p daemon.notice "initializing workspace $workspace"
+		TZ_SET="${TZ:-}" PICOCLAW_HOME="$CONFDIR" "$PROG" onboard >/dev/null 2>&1
+		: >"$ONBOARD_MARKER"
+	fi
+
+	# On a cold boot the agent needs the clock and the network before it can
+	# reach an LLM API. Wait in the background so procd is not blocked.
+	if [ "$(awk -F. '{print $1}' /proc/uptime 2>/dev/null || echo 999)" -lt 120 ]; then
+		sleep "$delay"
+	fi
+
+	procd_open_instance "$NAME"
+	procd_set_param command "$PROG" gateway
+	procd_set_param env \
+		PICOCLAW_HOME="$CONFDIR" \
+		PICOCLAW_CONFIG="$CONF" \
+		PICOCLAW_GATEWAY_HOST="$PICOCLAW_GATEWAY_HOST" \
+		PICOCLAW_GATEWAY_PORT="$PICOCLAW_GATEWAY_PORT" \
+		PICOCLAW_AGENTS_DEFAULTS_WORKSPACE="$workspace" \
+		PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE="$PICOCLAW_AGENTS_DEFAULTS_RESTRICT_TO_WORKSPACE"
+
+	# A TZ file is only present when the system clock is already synchronised;
+	# passing an unresolvable TZ would break time formatting in channel output.
+	if [ -f /etc/localtime ]; then
+		procd_append_param env TZ="${TZ:-UTC}"
+	fi
+
+	procd_set_param stdout "$logger_on"
+	procd_set_param stderr "$logger_on"
+	procd_set_param respawn 3600 5 5
+	procd_set_param file "$CONF"
+	procd_close_instance
+}
+
+start_service() {
+	config_load picoclaw
+	config_foreach start_instance basic
+}
+
+service_triggers() {
+	procd_add_reload_trigger picoclaw
+}

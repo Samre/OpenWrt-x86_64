@@ -194,4 +194,138 @@ fi
 grep -qF 'if ((ct->proto.tcp.seen[0].flags & IP_CT_TCP_FLAG_BE_LIBERAL)' "$SFE_CM" \
   || { echo "::error::liberal-flag condition missing from ${SFE_CM}"; exit 1; }
 
+# --- PicoClaw (AI agent) ----------------------------------------------------
+# The package itself lives in package/picoclaw/ in this repository and is moved
+# into the tree by the workflow's "Load custom configuration" step. Everything
+# below is a precondition or a post-condition check, because the two previous
+# AI integration attempts in this repository failed silently:
+#
+#   * a third-party Makefile injected version ldflags into a source path that
+#     upstream had moved, which the Go linker ignores without any error;
+#   * the same Makefile sed-patched a helper function that no longer existed,
+#     so the binary would have ignored PICOCLAW_HOME.
+#
+# Neither produced a build failure. They produced a broken firmware.
+
+PICOCLAW_PKG="package/picoclaw"
+PICOCLAW_MAKEFILE="$PICOCLAW_PKG/Makefile"
+PICOCLAW_INIT="$PICOCLAW_PKG/files/picoclaw.init"
+PICOCLAW_UCI_DEFAULT="$PICOCLAW_PKG/files/picoclaw.uci-default"
+PICOCLAW_CONF="$PICOCLAW_PKG/files/picoclaw.conf"
+PICOCLAW_REF_JSON="$PICOCLAW_PKG/files/picoclaw-config.json"
+
+for f in "$PICOCLAW_MAKEFILE" "$PICOCLAW_INIT" "$PICOCLAW_UCI_DEFAULT" "$PICOCLAW_CONF" "$PICOCLAW_REF_JSON"; do
+  [ -f "$f" ] || { echo "::error::$f is missing; the AI agent package would not be built"; exit 1; }
+done
+
+# 1. The pinned upstream commit must be an explicit SHA, never a branch. A
+#    floating revision is what let the third-party patches rot unnoticed.
+PICOCLAW_SHA=$(grep -E '^PKG_SOURCE_VERSION:=' "$PICOCLAW_MAKEFILE" | cut -d= -f2)
+if ! printf '%s' "$PICOCLAW_SHA" | grep -qE '^[0-9a-f]{40}$'; then
+  echo "::error::PKG_SOURCE_VERSION in $PICOCLAW_MAKEFILE is '${PICOCLAW_SHA}', expected a 40-char commit SHA"
+  exit 1
+fi
+echo "  picoclaw: pinned to ${PICOCLAW_SHA}"
+
+# 2. The version ldflags must target the package that actually declares the
+#    variables. Upstream moved them from cmd/picoclaw/internal to pkg/config;
+#    -X on an unknown symbol is silently ignored by the linker, so a wrong path
+#    here ships a binary reporting a permanently wrong version.
+if grep -qE "\-X '.*/internal\.(version|Version)" "$PICOCLAW_MAKEFILE"; then
+  echo "::error::$PICOCLAW_MAKEFILE injects version ldflags into .../internal.*, which no longer declares them"
+  exit 1
+fi
+grep -q "github.com/sipeed/picoclaw/pkg/config.Version" "$PICOCLAW_MAKEFILE" \
+  || { echo "::error::$PICOCLAW_MAKEFILE does not inject pkg/config.Version"; exit 1; }
+echo "  picoclaw: version ldflags target pkg/config"
+
+# 3. goolm must be in the build tags. OpenWrt compiles Go packages with
+#    CGO_ENABLED=0, and goolm is the pure-Go driver for modernc.org/sqlite;
+#    without it the session/memory store has no database backend.
+grep -qE '^GO_PKG_TAGS:=.*\bgoolm\b' "$PICOCLAW_MAKEFILE" \
+  || { echo "::error::$PICOCLAW_MAKEFILE must build with the goolm tag (pure-Go sqlite)"; exit 1; }
+grep -qE '^GO_PKG_TAGS:=.*\bstdjson\b' "$PICOCLAW_MAKEFILE" \
+  || { echo "::error::$PICOCLAW_MAKEFILE must build with the stdjson tag"; exit 1; }
+echo "  picoclaw: build tags include goolm,stdjson"
+
+# 4. The Go toolchain in the feed must satisfy the module's `go` directive.
+#    This is the check that makes the "requires Go 1.25, SDK ships 1.23" trap
+#    fail loudly instead of as an obscure compile error deep in the log.
+GO_MAKEFILE="feeds/packages/lang/golang/golang/Makefile"
+if [ -f "$GO_MAKEFILE" ]; then
+  GO_VER=$(grep -E '^GO_VERSION_MAJOR_MINOR:=' "$GO_MAKEFILE" | head -n1 | cut -d= -f2 | tr -d '[:space:]')
+  [ -n "$GO_VER" ] || { echo "::error::cannot read GO_VERSION_MAJOR_MINOR from $GO_MAKEFILE"; exit 1; }
+  echo "  go toolchain in feed: $GO_VER"
+  # The module declares `go 1.25.13`; require >= 1.25 from the feed toolchain.
+  if [ "$(printf '%s\n%s\n' "1.25" "$GO_VER" | sort -V | head -n1)" != "1.25" ]; then
+    echo "::error::feed Go toolchain is $GO_VER but picoclaw needs >= 1.25"
+    echo "::error::lede's packages feed normally ships a newer Go; if not, replace feeds/packages/lang/golang"
+    exit 1
+  fi
+  echo "  picoclaw: Go toolchain $GO_VER satisfies the module requirement (>= 1.25)"
+else
+  echo "::warning::$GO_MAKEFILE not found; skipped the Go version precondition"
+fi
+
+# 5. Select the package. This has to happen here rather than in the committed
+#    .config: the workflow reconciles .config against make defconfig and fails
+#    the build for any symbol whose package is not in an installed feed, and
+#    package/picoclaw is only moved into the tree in this same step.
+if ! grep -qE '^CONFIG_PACKAGE_picoclaw=y$' .config; then
+  printf '\n# AI agent added by %s\nCONFIG_PACKAGE_picoclaw=y\n' "$(basename "$0")" >>.config
+  echo "  .config: CONFIG_PACKAGE_picoclaw=y added"
+fi
+grep -qE '^CONFIG_PACKAGE_picoclaw=y$' .config \
+  || { echo "::error::failed to enable CONFIG_PACKAGE_picoclaw in .config"; exit 1; }
+
+# 6. The reference JSON must parse. It ships in the image, and a malformed one
+#    would only be noticed by an operator on a flashed device.
+#    `command -v` alone is not a sufficient probe: on some systems python3
+#    resolves to a stub that exits without running.
+json_checked=0
+if command -v jq >/dev/null 2>&1 && jq -e . "$PICOCLAW_REF_JSON" >/dev/null 2>&1; then
+  json_checked=1
+elif command -v python3 >/dev/null 2>&1 &&
+  python3 -c 'import json' >/dev/null 2>&1 &&
+  python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$PICOCLAW_REF_JSON" >/dev/null 2>&1; then
+  json_checked=1
+elif command -v jq >/dev/null 2>&1 || (command -v python3 >/dev/null 2>&1 && python3 -c 'import json' >/dev/null 2>&1); then
+  echo "::error::$PICOCLAW_REF_JSON is not valid JSON"
+  exit 1
+else
+  echo "::warning::neither jq nor a working python3 available; skipped the JSON validation"
+fi
+[ "$json_checked" -eq 1 ] && echo "  picoclaw: reference config JSON is valid"
+
+# 7. Security posture. The firmware must ship with the gateway on loopback and
+#    the file tools confined to the workspace. These are asserted rather than
+#    trusted, because the third-party package shipped the opposite defaults.
+grep -qE "^[[:space:]]*option host '127\.0\.0\.1'" "$PICOCLAW_CONF" \
+  || { echo "::error::$PICOCLAW_CONF must default the gateway host to 127.0.0.1"; exit 1; }
+grep -qE "^[[:space:]]*option restrict_to_workspace '1'" "$PICOCLAW_CONF" \
+  || { echo "::error::$PICOCLAW_CONF must default restrict_to_workspace to 1"; exit 1; }
+if grep -qE "^[[:space:]]*option host '0\.0\.0\.0'" "$PICOCLAW_CONF"; then
+  echo "::error::$PICOCLAW_CONF exposes the gateway on 0.0.0.0"
+  exit 1
+fi
+echo "  picoclaw: gateway bound to loopback, workspace restricted"
+
+# 8. No credential may be baked into the image. Catch a key committed into the
+#    shipped reference config before it is published in a release tarball.
+if grep -qE '"(api_key|token|app_secret|client_secret|encrypt_key)"[[:space:]]*:[[:space:]]*"[^"]+"' "$PICOCLAW_REF_JSON"; then
+  echo "::error::$PICOCLAW_REF_JSON contains a non-empty credential; it would ship inside the firmware"
+  exit 1
+fi
+echo "  picoclaw: no credentials present in the shipped reference config"
+
+# 9. The init script must not export secrets into the process environment,
+#    which is readable via /proc/<pid>/environ on an unpatched kernel.
+if grep -qE '^[[:space:]]*export .*(API_KEY|TOKEN|SECRET)' "$PICOCLAW_INIT"; then
+  echo "::error::$PICOCLAW_INIT exports a credential; it must stay in /etc/picoclaw/config.json"
+  exit 1
+fi
+grep -q 'PICOCLAW_HOME' "$PICOCLAW_INIT" \
+  || { echo "::error::$PICOCLAW_INIT does not set PICOCLAW_HOME, so the config path would not resolve"; exit 1; }
+echo "  picoclaw: init script sets PICOCLAW_HOME and exports no credentials"
+
 echo "All DIY part 2 edits verified."

@@ -52,8 +52,75 @@
 - DDNS（含阿里云 / DNSPod 脚本）、ddnsto 内网穿透
 - vlmcsd（KMS 激活）、coremark 跑分、软件包管理器
 
+**AI Agent**
+- **PicoClaw**（Go 单二进制，源自 [sipeed/picoclaw](https://github.com/sipeed/picoclaw)，本仓库自行打包，见下文）
+
 **界面**
 - Argon 主题 + Argon 配置插件，中文界面
+
+## AI Agent（PicoClaw）
+
+固件内置 [PicoClaw](https://github.com/sipeed/picoclaw)：Go 单二进制 AI 助手，运行内存约 10–20 MB，支持 30+ 模型后端与 19+ 消息通道（Telegram、飞书/Lark、钉钉、企业微信等）。
+
+**本仓库自行打包**（`package/picoclaw/`），不直接使用第三方 OpenWrt 包。原因是审计发现第三方包在本仓库固定的上游提交上存在多处静默失效：版本 ldflags 注入到了上游已迁移走的源码路径（Go linker 会静默忽略，固件将永远显示错误版本号）、`sed` 补丁的目标函数已不存在（二进制会忽略 `PICOCLAW_HOME`，服务起不来）、构建标签漏掉 `goolm`（丢 SQLite 支持）、以及默认把网关绑到 `0.0.0.0` 并关闭工作区限制。
+
+### 首次使用
+
+固件首次启动会生成默认配置，**不含任何密钥**（密钥绝不打进镜像）：
+
+```bash
+vi /etc/picoclaw/config.json     # 填 model_list[].api_key
+/etc/init.d/picoclaw restart
+```
+
+### 模型后端（运行时可切换）
+
+云端 API 与本地 Ollama 都支持，改 `config.json` 的 `agents.defaults.model_name` 即可切换，无需重装：
+
+| 后端 | `model` 写法 | `api_base` |
+|---|---|---|
+| DeepSeek（默认） | `deepseek/deepseek-chat` | 留空 |
+| OpenAI | `openai/gpt-4o` | 留空 |
+| 本地 Ollama | `ollama/qwen3:8b` | `http://127.0.0.1:11434/v1` |
+
+### 消息通道
+
+通道凭据写在 `settings` **子对象**里，不是平铺的顶层字段（PicoClaw 的 `Channel.GetDecoded()` 按类型解码 `settings`，平铺写法会被静默忽略）：
+
+```json
+"feishu": {
+  "enabled": true,
+  "settings": { "app_id": "...", "app_secret": "...", "is_lark": false }
+}
+```
+
+`is_lark` 置 `true` 表示使用国际版 Lark。飞书通道为 PicoClaw 内置，不需要额外软件包。
+
+### 安全默认值
+
+| 项目 | 默认 | 说明 |
+|---|---|---|
+| 网关监听 | `127.0.0.1:18790` | 仅回环。改绑 `0.0.0.0` 前请自行加防火墙规则与认证 |
+| `restrict_to_workspace` | `1` | 文件工具限制在工作区内 |
+| `heartbeat` | `0` | 关闭，避免空闲时持续消耗 API 额度 |
+| 密钥存放 | `/etc/picoclaw/config.json`，权限 `0600` | 不经环境变量传递，避免出现在 `/proc/<pid>/environ` |
+
+访问内置 Web UI 请用 SSH 端口转发，不要直接暴露端口：
+
+```bash
+ssh -L 18790:127.0.0.1:18790 root@192.168.216.10
+# 然后浏览器打开 http://127.0.0.1:18790
+```
+
+> 工作区默认在 `/etc/picoclaw/workspace`（overlay 内）。overlay 容量小或希望聊天记录不随重刷丢失时，把 `uci set picoclaw.agent.workspace` 指向外置盘即可。
+
+### 本地自检
+
+```bash
+bash tools/check-picoclaw.sh
+```
+
+在校验包定义、安全默认值与上游修订钉扎；`diy-part2.sh` 在构建时会做同一组断言，因此本机跑通即代表 CI 那一关多半能过（无需先跑一次完整 CI）。
 
 ## 云编译机制
 
@@ -68,13 +135,15 @@
 
 1. **调整插件**：编辑 `.config`（`CONFIG_PACKAGE_xxx=y`）。注意核对名称是否存在于已配置的 feed 中，透明代理类插件同时只能运行一个；
 2. **添加第三方源**：编辑 `diy-part1.sh`（在 feeds 更新前执行），源码里预置了 iStore、kenzok8/openwrt-packages、kenzok8/small 三个常用源；
-3. **构建期定制**：编辑 `diy-part2.sh`（feeds 更新后执行），当前包含：修改默认 IP、清除 root 默认密码哈希、shortcut-fe 内核兼容补丁。
+3. **构建期定制**：编辑 `diy-part2.sh`（feeds 更新后执行），当前包含：修改默认 IP、清除 root 默认密码哈希、shortcut-fe 内核兼容补丁、PicoClaw 包的全部前置与后置断言；
+4. **自建软件包**：放在仓库根的 `package/<名称>/`。workflow 会在构建前把它们合并进 `openwrt/package/`，合并时遇到同名目录会直接报错而不是覆盖。PicoClaw 即按此方式打包；
+5. **本地校验**：`tools/` 下是可脱离 OpenWrt 源码树运行的静态检查脚本。
 
 这两个 DIY 脚本都是 fail-fast 的：定制的目标文件不存在、替换没有命中，或补丁没有真正生效时，构建会直接失败并打印 `::error::`，不会静默产出一个没打补丁的固件。
 
-构建前还有一道配置对账：`make defconfig` 之后会逐个核对 `.config` 里被选中的符号是否仍然存在，被静默丢弃就报错退出——避免"配置里写了、固件里没有"。
+构建前还有一道配置对账：`make defconfig` 之后会逐个核对 `.config` 里被选中的符号是否仍然存在，被静默丢弃就报错退出——避免"配置里写了、固件里没有"。自建包因此必须在 `diy-part2.sh` 里选中（此时 `package/` 已就位），而不能只写在提交的 `.config` 里。
 
-另外，构建 job 只持有只读仓库权限，发布与打标签在独立的 publish job 中完成；第三方 action 全部固定到 commit SHA，不再跟随 `main` 分支。
+另外，构建 job 只持有只读仓库权限，发布与打标签在独立的 publish job 中完成；第三方 action 全部固定到 commit SHA，不再跟随 `main` 分支。自建包同样遵循这一原则：上游源码固定到具体 commit SHA，而非跟踪 `main`。
 
 修改后推送到仓库并在 Actions 页手动触发即可；或等待每周自动检查。
 

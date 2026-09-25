@@ -145,6 +145,25 @@ jobs:
         set -euo pipefail
         [ -e files ] && mv files openwrt/files
         [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        # Local packages authored in this repository (package/<name>/) have to
+        # exist in the tree before diy-part2.sh selects them: the reconciliation
+        # step below fails the build for any CONFIG_PACKAGE_* whose package is
+        # not in an installed feed or in package/. A plain `mv` is wrong here
+        # because openwrt/ may already contain a package/ directory from the
+        # feeds, so the subdirectories are merged instead.
+        if [ -d package ]; then
+          mkdir -p openwrt/package
+          for pkg in package/*/; do
+            [ -d "$pkg" ] || continue
+            name=$(basename "$pkg")
+            if [ -e "openwrt/package/$name" ]; then
+              echo "::error::openwrt/package/$name already exists; refusing to overwrite it with the local copy"
+              exit 1
+            fi
+            cp -a "$pkg" "openwrt/package/$name"
+            echo "local package staged: $name"
+          done
+        fi
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH

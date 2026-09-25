@@ -1,0 +1,39 @@
+# Line-ending policy.
+#
+# This repository is developed on Windows (core.autocrlf=true) but built on
+# Linux runners in GitHub Actions. Without these rules, checking the tree out
+# on Windows rewrites shell scripts and Makefiles to CRLF, and the next commit
+# pushes those CRLF bytes back. On the runner that surfaces as:
+#
+#   /bin/bash^M: bad interpreter: No such file or directory
+#   Makefile:NN: *** missing separator. Stop.
+#
+# Both are build failures that look unrelated to the edit that caused them, so
+# the endings are normalised for the files that must stay LF.
+
+# Shell scripts and OpenWrt build files: always LF.
+*.sh text eol=lf
+*.init text eol=lf
+*.uci-default text eol=lf
+Makefile text eol=lf
+*.mk text eol=lf
+*.conf text eol=lf
+
+# Workflow definitions: must be LF, and GitHub parses them directly.
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Configuration and data files that ship into the firmware.
+*.json text eol=lf
+*.md text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+
+# Deliberately left alone: Git already detects these as binary, and forcing
+# text handling on them would corrupt them.
+*.png binary
+*.jpg binary
+*.gz binary
+*.img binary
+*.ipk binary
+*.apk binary

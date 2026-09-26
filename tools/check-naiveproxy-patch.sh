@@ -1,92 +1,151 @@
 #!/bin/bash
 #
-# Exercises the naiveproxy workaround block from diy-part2.sh against the real
-# feeds/small Makefile, without needing an OpenWrt tree.
+# Exercises the naiveproxy patch logic from diy-part2.sh against the three
+# states the feeds/small Makefile has actually been observed in.
 #
-# The block cannot simply be sourced from diy-part2.sh (the rest of that script
-# needs an OpenWrt checkout), so the assertions are replayed here verbatim and
-# cross-checked against the real file.
+# This test exists because the first version of that logic coupled the version
+# fix and the hash fix behind a single condition:
 #
-# Usage: bash tools/check-naiveproxy-patch.sh /path/to/fetched/Makefile
+#   if version is already -2:  skip everything
+#   elif version is -1:        fix version AND hash
+#
+# The feed then moved to -2 on its own while leaving the x86_64 hash pointing at
+# the deleted -1 archive - a state neither branch handled. The build failed with
+# a checksum mismatch after a full compile, because the "skip" branch reported
+# success. The logic is now two independent fix-ups, and this test pins that.
+#
+# Usage: bash tools/check-naiveproxy-patch.sh
 
 set -uo pipefail
 
-MK="${1:?usage: $0 <path to naiveproxy Makefile>}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPT="$ROOT/diy-part2.sh"
 
-NAIVEPROXY_OLD_VERSION="154.0.8037.49-1"
-NAIVEPROXY_NEW_VERSION="154.0.8037.49-2"
-NAIVEPROXY_OLD_HASH="55a10e6ca08696f9b606e1b3cb1a65aba72253756c5e1769d78edd78d4a1c6ab"
-NAIVEPROXY_NEW_HASH="25ac92b86474fc62ed0e5008d7009f935115b9ae8a072f1fbafc92790ea283ce"
+NEW_VERSION="154.0.8037.49-2"
+OLD_HASH="55a10e6ca08696f9b606e1b3cb1a65aba72253756c5e1769d78edd78d4a1c6ab"
+NEW_HASH="25ac92b86474fc62ed0e5008d7009f935115b9ae8a072f1fbafc92790ea283ce"
 
 fail=0
 pass() { printf '  PASS %s\n' "$1"; }
-bad() { printf '  FAIL %s\n' "$1"; fail=1; }
+bad()  { printf '  FAIL %s\n' "$1"; fail=1; }
 
-# Baseline: how many PKG_HASH branches the file has BEFORE patching. Comparing
-# against this (rather than a hard-coded literal) is what proves the sed did
-# not add, remove or duplicate a branch.
-HASH_BRANCHES_BEFORE=$(grep -c '^  PKG_HASH:=' "$MK")
+# Pull the naiveproxy variables out of diy-part2.sh so this test cannot drift
+# from the script it is testing.
+eval "$(grep -E '^NAIVEPROXY_(OLD|NEW)_(VERSION|HASH)=' "$SCRIPT")"
 
-echo "== preconditions (the file must look like the block expects) =="
-c=$(grep -cF "PKG_REAL_VERSION:=$NAIVEPROXY_OLD_VERSION" "$MK")
-[ "$c" -eq 1 ] && pass "PKG_REAL_VERSION occurs once (=$NAIVEPROXY_OLD_VERSION)" || bad "PKG_REAL_VERSION count=$c"
+[ "$NAIVEPROXY_OLD_HASH" = "$OLD_HASH" ] || { echo "OLD_HASH differs from the script"; exit 1; }
+[ "$NAIVEPROXY_NEW_HASH" = "$NEW_HASH" ] || { echo "NEW_HASH differs from the script"; exit 1; }
 
-c=$(grep -cF "$NAIVEPROXY_OLD_HASH" "$MK")
-[ "$c" -eq 1 ] && pass "old hash occurs exactly once (global sed is safe)" || bad "old hash count=$c"
+# Build a Makefile in a given state. Mirrors the real file's shape: one
+# PKG_REAL_VERSION line and an architecture switch where x86_64 is the only
+# branch this repository builds.
+make_fixture() {
+	local dir="$1" version="$2" x86hash="$3"
+	mkdir -p "$dir"
+	{
+		echo "PKG_NAME:=naiveproxy"
+		echo "PKG_REAL_VERSION:=$version"
+		echo 'PKG_VERSION:=$(subst -,.,$(PKG_REAL_VERSION))'
+		echo "PKG_RELEASE:=1"
+		echo 'ifeq ($(ARCH_PREBUILT),aarch64_generic)'
+		echo "  PKG_HASH:=2de0827b5c07fc19635692b4b21172062072a6e28dcce1b948e7c3b21ffd94e1"
+		echo 'else ifeq ($(ARCH_PREBUILT),x86)'
+		echo "  PKG_HASH:=898dd52ba02f9737aa31d891e0f9b24c2d066ee6de59d49dd52073f9333fa2da"
+		echo 'else ifeq ($(ARCH_PREBUILT),x86_64)'
+		echo "  PKG_HASH:=$x86hash"
+		echo 'else'
+		echo "  PKG_HASH:=dummy"
+		echo 'endif'
+	} > "$dir/Makefile"
+}
 
-# This is the assertion that makes the unconditional sed defensible.
+# Extract just the naiveproxy block from diy-part2.sh and run it with
+# NAIVEPROXY_MK pointed at the fixture. The rest of the script needs an OpenWrt
+# tree, so only this block is extracted.
+run_block() {
+	local mk="$1"
+	local block
+	# Take the block from its first line down to the closing `fi` of the outer
+	# `if [ -f "$NAIVEPROXY_MK" ]`.
+	block="$(sed -n '/^NAIVEPROXY_MK=/,$ p' "$SCRIPT" | sed -n '1,/^fi$/p')"
+
+	# Drop the assignment of NAIVEPROXY_MK itself. The block re-declares it to
+	# the real feeds path, which would silently redirect the test at a file that
+	# does not exist and make every case take the "package not present" branch.
+	block="$(printf '%s\n' "$block" | grep -v '^NAIVEPROXY_MK=')"
+
+	(
+		set -uo pipefail
+		NAIVEPROXY_MK="$mk"
+		NAIVEPROXY_OLD_VERSION="$NAIVEPROXY_OLD_VERSION"
+		NAIVEPROXY_NEW_VERSION="$NAIVEPROXY_NEW_VERSION"
+		NAIVEPROXY_OLD_HASH="$NAIVEPROXY_OLD_HASH"
+		NAIVEPROXY_NEW_HASH="$NAIVEPROXY_NEW_HASH"
+		eval "$block"
+	)
+}
+
+assert_state() {
+	local mk="$1" want_version="$2" want_hash="$3" label="$4"
+	local v h
+	v="$(grep -m1 '^PKG_REAL_VERSION:=' "$mk" | cut -d= -f2)"
+	h="$(sed -n '/x86_64/,+1p' "$mk" | grep -oE '[0-9a-f]{64}')"
+
+	if [ "$v" = "$want_version" ] && [ "$h" = "$want_hash" ]; then
+		pass "$label"
+	else
+		bad "$label"
+		printf '      version: got %s want %s\n      x86_64 hash: got %s want %s\n' \
+			"$v" "$want_version" "${h:-none}" "$want_hash"
+	fi
+}
+
+echo "== constant consistency =="
+pass "OLD/NEW hash constants match the test"
+
 echo
-echo "== apply the same sed the build script applies =="
-sed -i \
-	-e "s/^PKG_REAL_VERSION:=${NAIVEPROXY_OLD_VERSION}\$/PKG_REAL_VERSION:=${NAIVEPROXY_NEW_VERSION}/" \
-	-e "s/${NAIVEPROXY_OLD_HASH}/${NAIVEPROXY_NEW_HASH}/" \
-	"$MK"
+echo "== state 1: feed fully on -1 (what the first failure looked like) =="
+d1="$(mktemp -d)"; make_fixture "$d1" "154.0.8037.49-1" "$OLD_HASH"
+out1="$(run_block "$d1/Makefile" 2>&1)"; rc1=$?
+printf '%s\n' "$out1" | sed 's/^/      /'
+[ "$rc1" -eq 0 ] && pass "block exits 0" || bad "block exited $rc1"
+assert_state "$d1/Makefile" "$NEW_VERSION" "$NEW_HASH" "version and hash both fixed"
 
 echo
-echo "== postconditions =="
-grep -qF "PKG_REAL_VERSION:=$NAIVEPROXY_NEW_VERSION" "$MK" \
-	&& pass "version retargeted to $NAIVEPROXY_NEW_VERSION" || bad "version not retargeted"
-
-if grep -qF "$NAIVEPROXY_OLD_HASH" "$MK"; then
-	bad "old (deleted) hash still present"
-else
-	pass "old hash removed"
-fi
-
-c=$(grep -cF "$NAIVEPROXY_NEW_HASH" "$MK")
-[ "$c" -eq 1 ] && pass "new hash occurs exactly once" || bad "new hash count=$c"
-
-# The new hash must sit in the x86_64 branch, not somewhere else.
-if sed -n '/x86_64/,+1p' "$MK" | grep -qF "$NAIVEPROXY_NEW_HASH"; then
-	pass "new hash is inside the x86_64 branch"
-else
-	bad "new hash is NOT in the x86_64 branch"
-fi
+echo "== state 2: feed moved to -2 but kept the stale -1 hash (the regression) =="
+d2="$(mktemp -d)"; make_fixture "$d2" "$NEW_VERSION" "$OLD_HASH"
+out2="$(run_block "$d2/Makefile" 2>&1)"; rc2=$?
+printf '%s\n' "$out2" | sed 's/^/      /'
+[ "$rc2" -eq 0 ] && pass "block exits 0" || bad "block exited $rc2"
+assert_state "$d2/Makefile" "$NEW_VERSION" "$NEW_HASH" "stale hash repaired without touching the version"
 
 echo
-echo "== resulting x86_64 branch =="
-sed -n '/^else ifeq (\$(ARCH_PREBUILT),x86_64)/,+1p' "$MK"
+echo "== state 3: feed fully correct (must be a no-op) =="
+d3="$(mktemp -d)"; make_fixture "$d3" "$NEW_VERSION" "$NEW_HASH"
+before="$(cksum "$d3/Makefile")"
+out3="$(run_block "$d3/Makefile" 2>&1)"; rc3=$?
+after="$(cksum "$d3/Makefile")"
+printf '%s\n' "$out3" | sed 's/^/      /'
+[ "$rc3" -eq 0 ] && pass "block exits 0" || bad "block exited $rc3"
+[ "$before" = "$after" ] && pass "file untouched" || bad "file was modified when it should not have been"
+assert_state "$d3/Makefile" "$NEW_VERSION" "$NEW_HASH" "state remains correct"
 
 echo
-echo "== other architecture hashes untouched =="
-# Comparing before/after proves the global sed touched exactly one branch.
-total=$(grep -c '^  PKG_HASH:=' "$MK")
-if [ "$total" -eq "$HASH_BRANCHES_BEFORE" ]; then
-	pass "$total PKG_HASH branches before and after (none added or removed)"
-else
-	bad "PKG_HASH branch count changed: $HASH_BRANCHES_BEFORE -> $total"
-fi
-changed=$(grep -vF "$NAIVEPROXY_NEW_HASH" "$MK" | grep -c '^  PKG_HASH:=')
-if [ "$changed" -eq "$((HASH_BRANCHES_BEFORE - 1))" ]; then
-	pass "exactly one branch was rewritten"
-else
-	bad "unexpected number of rewritten branches"
-fi
+echo "== state 4: unknown version (must warn, not guess) =="
+d4="$(mktemp -d)"; make_fixture "$d4" "999.0.0-9" "$OLD_HASH"
+out4="$(run_block "$d4/Makefile" 2>&1)"; rc4=$?
+printf '%s\n' "$out4" | sed 's/^/      /'
+[ "$rc4" -eq 0 ] && pass "block exits 0 (warns rather than failing the build)" || bad "block exited $rc4"
+printf '%s\n' "$out4" | grep -q '::warning::' \
+	&& pass "emits a warning for the unknown version" \
+	|| bad "no warning for an unknown version"
+
+rm -rf "$d1" "$d2" "$d3" "$d4"
 
 printf '\n'
 if [ "$fail" -eq 0 ]; then
-	printf 'naiveproxy workaround verified.\n'
+	printf 'naiveproxy patch logic verified across all observed feed states.\n'
 else
-	printf 'naiveproxy workaround FAILED.\n'
+	printf 'naiveproxy patch logic FAILED.\n'
 fi
 exit "$fail"

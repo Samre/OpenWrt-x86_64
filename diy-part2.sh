@@ -434,30 +434,49 @@ NAIVEPROXY_OLD_HASH="55a10e6ca08696f9b606e1b3cb1a65aba72253756c5e1769d78edd78d4a
 NAIVEPROXY_NEW_HASH="25ac92b86474fc62ed0e5008d7009f935115b9ae8a072f1fbafc92790ea283ce"
 
 if [ -f "$NAIVEPROXY_MK" ]; then
-  if grep -qF "$NAIVEPROXY_NEW_VERSION" "$NAIVEPROXY_MK"; then
-    echo "  naiveproxy: already on ${NAIVEPROXY_NEW_VERSION} (feed was updated upstream); no patch needed"
+  np_changed=0
+
+  # Report what the feed currently pins. Without this, a silently-skipped patch
+  # is invisible in the build log.
+  echo "  naiveproxy: feed pins version=$(grep -m1 '^PKG_REAL_VERSION:=' "$NAIVEPROXY_MK" | cut -d= -f2)"
+
+  # --- version half ---------------------------------------------------------
+  # Driven by its own condition. The feed is a moving target: it moved to -2 on
+  # its own during development, and coupling this to the hash fix below meant a
+  # half-updated feed could never be repaired.
+  if grep -qF "PKG_REAL_VERSION:=${NAIVEPROXY_NEW_VERSION}" "$NAIVEPROXY_MK"; then
+    echo "  naiveproxy: version already ${NAIVEPROXY_NEW_VERSION} (feed moved on); no version change needed"
   elif grep -qF "PKG_REAL_VERSION:=${NAIVEPROXY_OLD_VERSION}" "$NAIVEPROXY_MK"; then
-    # The substitutions below are unconditional sed replacements, so assert
-    # first that each target occurs exactly once. If upstream ever reuses the
-    # same hash for a second architecture, a global replace would silently
-    # rewrite that branch too and produce a checksum failure at download time
-    # on a package unrelated to naiveproxy.
-    old_hash_count=$(grep -cF "$NAIVEPROXY_OLD_HASH" "$NAIVEPROXY_MK")
-    [ "$old_hash_count" -eq 1 ] \
-      || { echo "::error::expected exactly one x86_64 naiveproxy hash ${NAIVEPROXY_OLD_HASH}, found ${old_hash_count}; refusing a global replace"; exit 1; }
-    old_version_count=$(grep -cF "PKG_REAL_VERSION:=${NAIVEPROXY_OLD_VERSION}" "$NAIVEPROXY_MK")
-    [ "$old_version_count" -eq 1 ] \
-      || { echo "::error::expected exactly one PKG_REAL_VERSION line, found ${old_version_count}"; exit 1; }
-
-    # Retarget the release and the matching x86_64 archive hash together; the
-    # two must move as a pair or PKG_HASH verification fails on download.
-    sed -i \
-      -e "s/^PKG_REAL_VERSION:=${NAIVEPROXY_OLD_VERSION}\$/PKG_REAL_VERSION:=${NAIVEPROXY_NEW_VERSION}/" \
-      -e "s/${NAIVEPROXY_OLD_HASH}/${NAIVEPROXY_NEW_HASH}/" \
-      "$NAIVEPROXY_MK"
-
+    vcount=$(grep -cF "PKG_REAL_VERSION:=${NAIVEPROXY_OLD_VERSION}" "$NAIVEPROXY_MK")
+    [ "$vcount" -eq 1 ] \
+      || { echo "::error::expected exactly one PKG_REAL_VERSION line, found ${vcount}"; exit 1; }
+    sed -i "s/^PKG_REAL_VERSION:=${NAIVEPROXY_OLD_VERSION}\$/PKG_REAL_VERSION:=${NAIVEPROXY_NEW_VERSION}/" "$NAIVEPROXY_MK"
     grep -qF "PKG_REAL_VERSION:=${NAIVEPROXY_NEW_VERSION}" "$NAIVEPROXY_MK" \
       || { echo "::error::naiveproxy version substitution did not apply to ${NAIVEPROXY_MK}"; exit 1; }
+    echo "  naiveproxy: version ${NAIVEPROXY_OLD_VERSION} -> ${NAIVEPROXY_NEW_VERSION}"
+    np_changed=1
+  else
+    echo "::warning::naiveproxy pins neither ${NAIVEPROXY_OLD_VERSION} nor ${NAIVEPROXY_NEW_VERSION}; re-check this block"
+  fi
+
+  # --- hash half ------------------------------------------------------------
+  # Independent of the version half on purpose. The feed updated its version to
+  # -2 while leaving the x86_64 hash pointing at the deleted -1 archive, which
+  # is a checksum mismatch at download time, not a 404. This is the case that
+  # the version-first logic above used to skip entirely.
+  if grep -qF "$NAIVEPROXY_NEW_HASH" "$NAIVEPROXY_MK"; then
+    echo "  naiveproxy: x86_64 hash already current"
+  elif grep -qF "$NAIVEPROXY_OLD_HASH" "$NAIVEPROXY_MK"; then
+    # The replacement below is a global sed, so assert the target is unique.
+    # If upstream ever reuses this hash for a second architecture, a global
+    # replace would rewrite that branch too and produce a checksum failure on an
+    # unrelated package.
+    old_hash_count=$(grep -cF "$NAIVEPROXY_OLD_HASH" "$NAIVEPROXY_MK")
+    [ "$old_hash_count" -eq 1 ] \
+      || { echo "::error::expected exactly one naiveproxy x86_64 hash ${NAIVEPROXY_OLD_HASH}, found ${old_hash_count}; refusing a global replace"; exit 1; }
+
+    sed -i "s/${NAIVEPROXY_OLD_HASH}/${NAIVEPROXY_NEW_HASH}/" "$NAIVEPROXY_MK"
+
     if grep -qF "$NAIVEPROXY_OLD_HASH" "$NAIVEPROXY_MK"; then
       echo "::error::naiveproxy still carries the deleted archive hash ${NAIVEPROXY_OLD_HASH}"
       exit 1
@@ -465,13 +484,18 @@ if [ -f "$NAIVEPROXY_MK" ]; then
     new_hash_count=$(grep -cF "$NAIVEPROXY_NEW_HASH" "$NAIVEPROXY_MK")
     [ "$new_hash_count" -eq 1 ] \
       || { echo "::error::expected exactly one updated naiveproxy hash, found ${new_hash_count}"; exit 1; }
-    # Guard against a future feed layout change moving the hash to another
+    # Guard against a future feed layout change moving the hash into another
     # architecture branch while leaving this check silently satisfied.
     sed -n '/x86_64/,+1p' "$NAIVEPROXY_MK" | grep -qF "$NAIVEPROXY_NEW_HASH" \
       || { echo "::error::the updated hash is not inside the x86_64 branch of ${NAIVEPROXY_MK}"; exit 1; }
-    echo "  naiveproxy: ${NAIVEPROXY_OLD_VERSION} -> ${NAIVEPROXY_NEW_VERSION} (release deleted upstream, 404)"
+    echo "  naiveproxy: x86_64 hash updated to the ${NAIVEPROXY_NEW_VERSION} archive"
+    np_changed=1
   else
-    echo "::warning::naiveproxy is pinned to neither ${NAIVEPROXY_OLD_VERSION} nor ${NAIVEPROXY_NEW_VERSION}; the feed changed shape, re-check this block"
+    echo "::warning::naiveproxy carries neither the known-stale hash nor the current one; re-check this block"
+  fi
+
+  if [ "$np_changed" -eq 0 ]; then
+    echo "  naiveproxy: nothing to patch"
   fi
 else
   echo "  naiveproxy: feed package not present, skipping"

@@ -310,15 +310,7 @@ if grep -qE "^[[:space:]]*option host '0\.0\.0\.0'" "$PICOCLAW_CONF"; then
 fi
 echo "  picoclaw: gateway bound to loopback, workspace restricted"
 
-# 8. No credential may be baked into the image. Catch a key committed into the
-#    shipped reference config before it is published in a release tarball.
-if grep -qE '"(api_key|token|app_secret|client_secret|encrypt_key)"[[:space:]]*:[[:space:]]*"[^"]+"' "$PICOCLAW_REF_JSON"; then
-  echo "::error::$PICOCLAW_REF_JSON contains a non-empty credential; it would ship inside the firmware"
-  exit 1
-fi
-echo "  picoclaw: no credentials present in the shipped reference config"
-
-# 9. The init script must not export secrets into the process environment,
+# 8. The init script must not export secrets into the process environment,
 #    which is readable via /proc/<pid>/environ on an unpatched kernel.
 if grep -qE '^[[:space:]]*export .*(API_KEY|TOKEN|SECRET)' "$PICOCLAW_INIT"; then
   echo "::error::$PICOCLAW_INIT exports a credential; it must stay in /etc/picoclaw/config.json"
@@ -327,6 +319,97 @@ fi
 grep -q 'PICOCLAW_HOME' "$PICOCLAW_INIT" \
   || { echo "::error::$PICOCLAW_INIT does not set PICOCLAW_HOME, so the config path would not resolve"; exit 1; }
 echo "  picoclaw: init script sets PICOCLAW_HOME and exports no credentials"
+
+# --- PicoClaw approval gate -------------------------------------------------
+# The gate is what stops the agent from running arbitrary commands as root
+# without review. If any piece below is missing, the firmware would still build
+# and boot - with the agent silently ungated. That is precisely the kind of
+# silent degradation the rest of this script exists to prevent.
+
+APPROVAL_DIR="$PICOCLAW_PKG/files/approval"
+GATE_UC="$APPROVAL_DIR/gate.uc"
+POLICY_UC="$APPROVAL_DIR/policy.uc"
+EXECUTOR_UC="$APPROVAL_DIR/executor.uc"
+
+for f in "$GATE_UC" "$POLICY_UC" "$EXECUTOR_UC"; do
+  [ -f "$f" ] || { echo "::error::$f is missing; the agent would run commands without approval"; exit 1; }
+done
+
+# The gate must be registered at first boot, or it never runs at all.
+grep -q 'hooks.processes' "$PICOCLAW_UCI_DEFAULT" \
+  || { echo "::error::$PICOCLAW_UCI_DEFAULT does not register the approval hook in config.json"; exit 1; }
+grep -q 'picoclaw_approval' "$PICOCLAW_UCI_DEFAULT" \
+  || { echo "::error::$PICOCLAW_UCI_DEFAULT does not name the approval hook process"; exit 1; }
+grep -q 'intercept' "$PICOCLAW_UCI_DEFAULT" \
+  || { echo "::error::$PICOCLAW_UCI_DEFAULT registers the hook without intercept stages"; exit 1; }
+
+# gate.uc imports policy.uc by relative path, which only resolves because the
+# hook config sets Dir to the approval directory. Both halves must agree.
+grep -qE "import \* as policy from '\./policy\.uc'" "$GATE_UC" \
+  || { echo "::error::$GATE_UC does not import ./policy.uc as expected"; exit 1; }
+grep -q 'dir: "/usr/share/picoclaw/approval"' "$PICOCLAW_UCI_DEFAULT" \
+  || { echo "::error::the hook Dir is not /usr/share/picoclaw/approval, so the policy import would fail"; exit 1; }
+
+# The gate must start the executor, or approvals would sit in "approved" forever.
+grep -q 'executor.uc' "$GATE_UC" \
+  || { echo "::error::$GATE_UC never starts the executor; approved commands would never run"; exit 1; }
+
+# All three scripts must be installed.
+for f in gate.uc policy.uc executor.uc; do
+  grep -q "files/approval/$f" "$PICOCLAW_MAKEFILE" \
+    || { echo "::error::$PICOCLAW_MAKEFILE does not install $f"; exit 1; }
+done
+echo "  picoclaw: approval gate present, registered with a matching Dir, and installed"
+
+# --- LuCI approval interface ------------------------------------------------
+# The gate blocks the agent by design; without a UI the operator would have no
+# way to approve anything, so the agent would be permanently unable to act.
+
+LUCI_PICOCLAW_PKG="package/luci-app-picoclaw"
+LUCI_PICOCLAW_MAKEFILE="$LUCI_PICOCLAW_PKG/Makefile"
+LUCI_PICOCLAW_ACL="$LUCI_PICOCLAW_PKG/root/usr/share/rpcd/acl.d/luci-app-picoclaw.json"
+LUCI_PICOCLAW_RPC="$LUCI_PICOCLAW_PKG/root/usr/share/rpcd/ucode/picoclaw.uc"
+LUCI_PICOCLAW_MENU="$LUCI_PICOCLAW_PKG/root/usr/share/luci/menu.d/luci-app-picoclaw.json"
+LUCI_PICOCLAW_VIEW="$LUCI_PICOCLAW_PKG/htdocs/luci-static/resources/view/picoclaw/approvals.js"
+
+for f in "$LUCI_PICOCLAW_MAKEFILE" "$LUCI_PICOCLAW_ACL" "$LUCI_PICOCLAW_RPC" "$LUCI_PICOCLAW_MENU" "$LUCI_PICOCLAW_VIEW"; do
+  [ -f "$f" ] || { echo "::error::$f is missing; the approval queue would have no user interface"; exit 1; }
+done
+
+grep -qE '^LUCI_DEPENDS:=.*\+picoclaw' "$LUCI_PICOCLAW_MAKEFILE" \
+  || { echo "::error::$LUCI_PICOCLAW_MAKEFILE does not depend on picoclaw"; exit 1; }
+
+# ACL scope. The third-party app this replaces grants uci "*" plus exec on
+# /bin/ash, which is equivalent to handing the web interface a root shell.
+# Assert this app does not, because a later edit could reintroduce it.
+if grep -qE '"\*"' "$LUCI_PICOCLAW_ACL"; then
+  echo "::error::$LUCI_PICOCLAW_ACL grants a wildcard scope; it must request only what it needs"
+  exit 1
+fi
+if grep -qE '/bin/(ash|sh)' "$LUCI_PICOCLAW_ACL"; then
+  echo "::error::$LUCI_PICOCLAW_ACL grants shell execution, which is equivalent to root"
+  exit 1
+fi
+grep -qE '"uci": \[ "picoclaw" \]' "$LUCI_PICOCLAW_ACL" \
+  || { echo "::error::$LUCI_PICOCLAW_ACL does not scope UCI access to the picoclaw section"; exit 1; }
+echo "  luci-app-picoclaw: ACL scoped to the picoclaw section, no wildcard, no shell exec"
+
+# Select the app. As with picoclaw itself this has to happen after package/ has
+# been staged into the tree, or `make defconfig` would drop the symbol.
+if ! grep -qE '^CONFIG_PACKAGE_luci-app-picoclaw=y$' .config; then
+  printf 'CONFIG_PACKAGE_luci-app-picoclaw=y\n' >>.config
+  echo "  .config: CONFIG_PACKAGE_luci-app-picoclaw=y added"
+fi
+grep -qE '^CONFIG_PACKAGE_luci-app-picoclaw=y$' .config \
+  || { echo "::error::failed to enable CONFIG_PACKAGE_luci-app-picoclaw in .config"; exit 1; }
+
+# 11. No credential may be baked into the image. Catch a key committed into the
+#     shipped reference config before it is published in a release tarball.
+if grep -qE '"(api_key|token|app_secret|client_secret|encrypt_key)"[[:space:]]*:[[:space:]]*"[^"]+"' "$PICOCLAW_REF_JSON"; then
+  echo "::error::$PICOCLAW_REF_JSON contains a non-empty credential; it would ship inside the firmware"
+  exit 1
+fi
+echo "  picoclaw: no credentials present in the shipped reference config"
 
 # --- naiveproxy: pinned release was deleted upstream -------------------------
 # feeds/small pins PKG_REAL_VERSION:=154.0.8037.49-1. Upstream published

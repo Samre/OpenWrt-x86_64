@@ -19,6 +19,15 @@ Makefile text eol=lf
 *.mk text eol=lf
 *.conf text eol=lf
 
+# ucode scripts. These run on the router under /usr/bin/ucode, and the approval
+# gate is one of them: a CRLF here would end every line with \r, which breaks the
+# JSON-RPC framing the gate speaks over stdio.
+*.uc text eol=lf
+
+# LuCI client-side views and the rpcd backends are parsed on the device.
+*.js text eol=lf
+*.mjs text eol=lf
+
 # Workflow definitions: must be LF, and GitHub parses them directly.
 *.yml text eol=lf
 *.yaml text eol=lf

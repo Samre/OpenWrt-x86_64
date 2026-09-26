@@ -15,18 +15,16 @@
 #
 # Reason for generating the config here instead of shipping a hand-written
 # template: upstream's DefaultConfig() is the single source of truth for the
-# schema. A copied template silently rots when upstream adds or renames
-# fields - which is exactly how the third-party package ended up shipping a
-# config.json missing every channel added after v0.1.x.
+# schema. A copied template silently rots when upstream adds or renames fields.
 
 [ -f /lib/functions.sh ] && . /lib/functions.sh
 
 CONFDIR=/etc/picoclaw
 CONF=$CONFDIR/config.json
 PROG=/usr/bin/picoclaw
+GATE=/usr/share/picoclaw/approval/gate.uc
+UCODE=/usr/bin/ucode
 
-# UCI may already create this directory, but be explicit and make the
-# permissions right before any secret is written into it.
 mkdir -p "$CONFDIR"
 chmod 0700 "$CONFDIR"
 
@@ -39,19 +37,100 @@ if [ ! -s "$CONF" ] && [ -x "$PROG" ]; then
 		logger -t picoclaw -p daemon.err \
 			"failed to generate $CONF; the agent will not start until it exists"
 	fi
-
-	# Harden it before it can hold a key. `onboard` writes with the default
-	# umask, which on OpenWrt leaves it world-readable.
-	[ -f "$CONF" ] && chmod 0600 "$CONF"
 fi
 
-# /etc/init.d/picoclaw enable is handled by the package's default enable
-# hook; only start when the operator has not disabled the service.
+# --- Install the approval gate into the agent configuration ------------------
+#
+# PicoClaw reads its hooks from this file, not from UCI, so the gate has to be
+# registered here. Without this block the exec tool would be completely
+# ungated: the model could run any command as root with no opportunity to
+# review it. That is why every failure path below is loud.
+install_gate() {
+	[ -x "$UCODE" ] || {
+		logger -t picoclaw -p daemon.err \
+			"$UCODE is missing; refusing to leave the agent's command execution ungated"
+		return 1
+	}
+	[ -f "$GATE" ] || {
+		logger -t picoclaw -p daemon.err \
+			"$GATE is missing; refusing to leave the agent's command execution ungated"
+		return 1
+	}
+
+	if [ ! -s "$CONF" ]; then
+		logger -t picoclaw -p daemon.err \
+			"$CONF is missing, so the approval gate could not be registered"
+		return 1
+	fi
+
+	# The hook config is merged into the existing JSON rather than rewritten, so
+	# operator settings (models, channels, workspace) are preserved.
+	#
+	# `Dir` is set to the approval directory because gate.uc imports policy.uc
+	# by relative path, and Command is an argv array executed without a shell,
+	# so nothing in this registration can be shell-injected.
+	#
+	# The target path arrives through the environment rather than as an argument:
+	# ucode's argument vector for -e scripts is not something this script should
+	# depend on, and getenv() is unambiguous.
+	PICOCLAW_HOME="$CONFDIR" CONFIG_PATH="$CONF" "$UCODE" -e '
+		let fs = require("fs");
+		const path = getenv("CONFIG_PATH");
+		if (path == null || length(path) == 0) die("CONFIG_PATH is not set\n");
+		const raw = fs.readfile(path);
+		let cfg = {};
+		try { cfg = json(raw); } catch (e) { die("config.json is not valid JSON: " + e + "\n"); }
+		if (type(cfg) != "object" || cfg == null) die("config.json is not a JSON object\n");
+
+		cfg.hooks = cfg.hooks ?? {};
+		cfg.hooks.enabled = true;
+		cfg.hooks.defaults = cfg.hooks.defaults ?? {};
+		/* The gate answers synchronously. A generous ceiling keeps a slow disk
+		   from being mistaken for a denial. */
+		cfg.hooks.defaults.interceptor_timeout_ms = cfg.hooks.defaults.interceptor_timeout_ms ?? 10000;
+		cfg.hooks.defaults.approval_timeout_ms = cfg.hooks.defaults.approval_timeout_ms ?? 10000;
+
+		cfg.hooks.processes = cfg.hooks.processes ?? {};
+		cfg.hooks.processes.picoclaw_approval = {
+			enabled: true,
+			priority: 100,
+			transport: "stdio",
+			command: ["/usr/bin/ucode", "/usr/share/picoclaw/approval/gate.uc"],
+			dir: "/usr/share/picoclaw/approval",
+			env: { PICOCLAW_HOME: "/etc/picoclaw", PATH: "/usr/sbin:/usr/bin:/sbin:/bin" },
+			observe: ["agent.tool.exec_start", "agent.tool.exec_end", "agent.tool.exec_skipped"],
+			intercept: ["before_tool", "approve_tool"]
+		};
+
+		fs.writefile(path, sprintf("%.J\n", cfg));
+	' || {
+		logger -t picoclaw -p daemon.err \
+			"could not register the approval gate in $CONF; the agent's command execution would be ungated"
+		return 1
+	}
+
+	# Harden before the file can hold a key.
+	chmod 0600 "$CONF"
+
+	if grep -q 'picoclaw_approval' "$CONF"; then
+		logger -t picoclaw -p daemon.notice "approval gate registered; commands need approval"
+		return 0
+	fi
+
+	logger -t picoclaw -p daemon.err \
+		"approval gate registration did not persist to $CONF"
+	return 1
+}
+
+if [ -s "$CONF" ]; then
+	install_gate || logger -t picoclaw -p daemon.err \
+		"PicoClaw will start with UNGATED command execution; fix $CONF before relying on the agent"
+fi
+
 if [ -x /etc/init.d/picoclaw ]; then
 	/etc/init.d/picoclaw enable 2>/dev/null
 fi
 
-# Announce the state so the operator knows whether a key is still needed.
 if [ -s "$CONF" ]; then
 	if grep -q '"api_key"[[:space:]]*:[[:space:]]*""' "$CONF" 2>/dev/null; then
 		logger -t picoclaw -p daemon.warn \
@@ -59,7 +138,6 @@ if [ -s "$CONF" ]; then
 	fi
 fi
 
-# Drop the stale LuCI index cache so the new service shows up without a reboot.
 rm -f /tmp/luci-indexcache 2>/dev/null
 rm -rf /tmp/luci-modulecache 2>/dev/null
 

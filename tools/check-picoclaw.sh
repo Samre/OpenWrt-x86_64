@@ -127,6 +127,65 @@ else
 	pass ".config does not select it (correct: package/ is staged later in the same step)"
 fi
 
+head_ "approval gate is complete and registered"
+# The gate is what stops the agent from running arbitrary commands as root
+# without review. Every piece below is required for it to actually run, and a
+# missing piece produces a firmware that builds and boots with the agent
+# silently ungated.
+GATE="$PICOCLAW_PKG/files/approval/gate.uc"
+POLICY="$PICOCLAW_PKG/files/approval/policy.uc"
+EXECUTOR="$PICOCLAW_PKG/files/approval/executor.uc"
+
+for f in "$GATE" "$POLICY" "$EXECUTOR"; do
+	[ -f "$f" ] && pass "$(basename "$f") present" || bad "missing $f"
+done
+
+grep -q 'hooks.processes' "$PICOCLAW_UCI_DEFAULT" \
+	&& pass "hook registered in config.json at first boot" \
+	|| bad "uci-defaults does not register the approval hook"
+grep -q 'picoclaw_approval' "$PICOCLAW_UCI_DEFAULT" \
+	&& pass "hook process is named" \
+	|| bad "hook process name missing"
+grep -q "dir: \"/usr/share/picoclaw/approval\"" "$PICOCLAW_UCI_DEFAULT" \
+	&& pass "hook Dir matches the policy import path" \
+	|| bad "hook Dir would break the relative policy.uc import"
+grep -qE "import \* as policy from '\./policy\.uc'" "$GATE" \
+	&& pass "gate imports ./policy.uc" \
+	|| bad "gate does not import ./policy.uc as expected"
+grep -q 'executor.uc' "$GATE" \
+	&& pass "gate starts the executor" \
+	|| bad "gate never starts the executor; approvals would never run"
+
+# Fail-closed behaviour: the error branch must deny, never continue.
+grep -q "action: 'respond'" "$GATE" \
+	&& pass "gate answers with respond (skips execution)" \
+	|| bad "gate does not use the respond action"
+
+head_ "LuCI approval interface is scoped safely"
+LUCI="$ROOT/package/luci-app-picoclaw"
+LUCI_ACL="$LUCI/root/usr/share/rpcd/acl.d/luci-app-picoclaw.json"
+
+for f in "$LUCI/Makefile" "$LUCI_ACL" \
+	"$LUCI/root/usr/share/rpcd/ucode/picoclaw.uc" \
+	"$LUCI/root/usr/share/luci/menu.d/luci-app-picoclaw.json" \
+	"$LUCI/htdocs/luci-static/resources/view/picoclaw/approvals.js"; do
+	[ -f "$f" ] && pass "$(basename "$f") present" || bad "missing $f"
+done
+
+if grep -qE '"\*"' "$LUCI_ACL"; then
+	bad "ACL grants a wildcard scope"
+else
+	pass "ACL has no wildcard scope"
+fi
+if grep -qE '/bin/(ash|sh)' "$LUCI_ACL"; then
+	bad "ACL grants shell execution (equivalent to root)"
+else
+	pass "ACL grants no shell execution"
+fi
+grep -qE '"uci": \[ "picoclaw" \]' "$LUCI_ACL" \
+	&& pass "UCI access scoped to the picoclaw section" \
+	|| bad "UCI access is not scoped to the picoclaw section"
+
 head_ "shipped reference JSON parses"
 # Note: `command -v python3` is not enough on Windows, where the Microsoft
 # Store ships a python3.exe stub that resolves but does not run. Probe it.

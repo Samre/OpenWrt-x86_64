@@ -1,0 +1,38 @@
+{
+	"luci-app-picoclaw": {
+		"description": "Grant access to the PicoClaw approval queue and its UCI configuration",
+
+		"read": {
+			"ubus": {
+				"luci.picoclaw": [
+					"list",
+					"audit_tail",
+					"executor_status"
+				],
+				"service": [ "list" ],
+				"rc": [ "list" ]
+			},
+
+			"uci": [ "picoclaw" ],
+
+			"file": {
+				"/etc/picoclaw/approvals/pending.json": [ "read" ],
+				"/etc/picoclaw/approvals/audit.log": [ "read" ],
+				"/etc/picoclaw/config.json": [ "read" ],
+				"/var/log/picoclaw.log": [ "read" ]
+			}
+		},
+
+		"write": {
+			"ubus": {
+				"luci.picoclaw": [
+					"approve",
+					"deny",
+					"forget"
+				]
+			},
+
+			"uci": [ "picoclaw" ]
+		}
+	}
+}

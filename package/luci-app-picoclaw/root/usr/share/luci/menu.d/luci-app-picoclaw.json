@@ -1,0 +1,52 @@
+{
+	"admin/services/picoclaw": {
+		"title": "PicoClaw",
+		"order": 60,
+		"action": {
+			"type": "firstchild"
+		},
+		"depends": {
+			"acl": [ "luci-app-picoclaw" ],
+			"uci": { "picoclaw": true }
+		}
+	},
+
+	"admin/services/picoclaw/approvals": {
+		"title": "Approvals",
+		"order": 10,
+		"action": {
+			"type": "view",
+			"path": "picoclaw/approvals"
+		},
+		"depends": {
+			"acl": [ "luci-app-picoclaw" ],
+			"ubus": { "luci.picoclaw": [ "list" ] }
+		}
+	},
+
+	"admin/services/picoclaw/audit": {
+		"title": "Audit log",
+		"order": 20,
+		"action": {
+			"type": "view",
+			"path": "picoclaw/audit"
+		},
+		"depends": {
+			"acl": [ "luci-app-picoclaw" ],
+			"ubus": { "luci.picoclaw": [ "audit_tail" ] }
+		}
+	},
+
+	"admin/services/picoclaw/settings": {
+		"title": "Settings",
+		"order": 30,
+		"action": {
+			"type": "view",
+			"path": "picoclaw/settings"
+		},
+		"depends": {
+			"acl": [ "luci-app-picoclaw" ],
+			"uci": { "picoclaw": true }
+		}
+	}
+}

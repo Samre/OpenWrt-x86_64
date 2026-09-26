@@ -96,6 +96,30 @@ vi /etc/picoclaw/config.json     # 填 model_list[].api_key
 
 `is_lark` 置 `true` 表示使用国际版 Lark。飞书通道为 PicoClaw 内置，不需要额外软件包。
 
+### 命令审批闸门
+
+AI 的 `exec` 工具等于**无人监管的 root**，上游自带的危险命令黑名单只能匹配明显的破坏性写法，而且上游明确说明其 hook 系统**无法挂起会话等待人工确认**。因此本固件采用可实现的形态：
+
+```
+exec 调用 → before_tool 拦截
+   ├─ 只读命令（df / logread / ip addr / uci show …）→ 直接放行
+   └─ 其余一切 → 阻断、记录、排队
+                    ↓
+        用户收到「待审批」消息（含命令原文与拦截原因）
+                    ↓
+        LuCI：服务 → PicoClaw → 审批
+                    ↓
+        批准后由 root 执行器执行，结果与退出码写入审计日志
+```
+
+**策略是"白名单放行、其余一律审批"**：只有明确可枚举参数的只读命令免审批。`ip` 采用三层校验（对象 + 只读动词 + 已知词表），所以 `ip addr show eth0` 放行而 `ip link set eth0 down` 必须审批。任何包含 shell 元字符（`;` `|` `&&` `$()` 反引号、重定向、引号）的命令一律转人工，**不做语法解释**——因为解释本身就是漏洞面。
+
+**fail-closed**：分类器加载失败、队列写不进去、请求解析失败，一律是阻断而非放行。
+
+界面共三页：**审批**（批准/拒绝/查看输出）、**审计日志**（含所有免审批命令的记录）、**设置**（UCI 参数，不含密钥）。
+
+> ACL 已刻意收窄：仅授权 `picoclaw` 这一节 UCI 与 6 个具名 RPC 方法。上游第三方插件给的是 `uci` 通配读写 + `/bin/ash` 执行权限，等于把 root shell 交给网页端。构建期有断言阻止这种授权被重新引入。
+
 ### 安全默认值
 
 | 项目 | 默认 | 说明 |
@@ -103,6 +127,7 @@ vi /etc/picoclaw/config.json     # 填 model_list[].api_key
 | 网关监听 | `127.0.0.1:18790` | 仅回环。改绑 `0.0.0.0` 前请自行加防火墙规则与认证 |
 | `restrict_to_workspace` | `1` | 文件工具限制在工作区内 |
 | `heartbeat` | `0` | 关闭，避免空闲时持续消耗 API 额度 |
+| 命令执行 | 白名单放行，其余需审批 | 见上文审批闸门；分类策略有 114 条用例覆盖 |
 | 密钥存放 | `/etc/picoclaw/config.json`，权限 `0600` | 不经环境变量传递，避免出现在 `/proc/<pid>/environ` |
 
 访问内置 Web UI 请用 SSH 端口转发，不要直接暴露端口：
@@ -117,10 +142,14 @@ ssh -L 18790:127.0.0.1:18790 root@192.168.216.10
 ### 本地自检
 
 ```bash
-bash tools/check-picoclaw.sh
+bash tools/check-picoclaw.sh              # 包定义、安全默认值、闸门完整性、ACL 收窄
+node tools/test-approval-policy.mjs       # 命令分类策略（114 条用例）
+bash tools/check-approval-policy-drift.sh # ucode 策略与测试镜像是否漂移
 ```
 
-在校验包定义、安全默认值与上游修订钉扎；`diy-part2.sh` 在构建时会做同一组断言，因此本机跑通即代表 CI 那一关多半能过（无需先跑一次完整 CI）。
+这套自检在校验包定义、安全默认值、审批闸门完整性与 ACL 收窄；`diy-part2.sh` 在构建时会做同一组断言，因此本机跑通即代表 CI 那一关多半能过（无需先跑一次完整 CI）。
+
+> `policy.uc`（设备上真正执行的 ucode）与 `test-approval-policy.mjs`（本机可跑的测试镜像）是两份实现，因为本机无法执行 ucode。漂移检查会在两者结构不一致时报错，避免测试与实现脱节。
 
 ## 云编译机制
 

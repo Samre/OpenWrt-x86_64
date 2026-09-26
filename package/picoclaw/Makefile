@@ -108,8 +108,18 @@ define Package/picoclaw/install
 	$(INSTALL_BIN) $(CURDIR)/files/picoclaw.uci-default $(1)/etc/uci-defaults/99-picoclaw
 	$(INSTALL_DIR) $(1)/etc/config
 	$(INSTALL_CONF) $(CURDIR)/files/picoclaw.conf $(1)/etc/config/picoclaw
+
 	$(INSTALL_DIR) $(1)/usr/share/picoclaw
 	$(INSTALL_DATA) $(CURDIR)/files/picoclaw-config.json $(1)/usr/share/picoclaw/picoclaw-config.json
+
+	# Approval gate. These run under the ucode interpreter at /usr/bin/ucode,
+	# which luci-base already pulls in together with ucode-mod-fs, -log, -math,
+	# -ubus and -uci. gate.uc imports policy.uc by relative path, which is why
+	# the hook's Dir is set to this directory in config.json.
+	$(INSTALL_DIR) $(1)/usr/share/picoclaw/approval
+	$(INSTALL_DATA) $(CURDIR)/files/approval/gate.uc $(1)/usr/share/picoclaw/approval/gate.uc
+	$(INSTALL_DATA) $(CURDIR)/files/approval/executor.uc $(1)/usr/share/picoclaw/approval/executor.uc
+	$(INSTALL_DATA) $(CURDIR)/files/approval/policy.uc $(1)/usr/share/picoclaw/approval/policy.uc
 endef
 
 # OpenWrt splits these two lists by whether the file exists in the package at
